@@ -31,6 +31,9 @@
       <symbol id="i-completa" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1.5"/></symbol>
       <symbol id="i-contraste" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor"/></symbol>
       <symbol id="i-nube" viewBox="0 0 24 24"><path d="M7 18.5h10.5a4 4 0 0 0 .4-8 6 6 0 0 0-11.6 1.4A3.3 3.3 0 0 0 7 18.5z"/></symbol>
+      <symbol id="i-editar" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></symbol>
+      <symbol id="i-deshacer" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+      <symbol id="i-tira" viewBox="0 0 24 24"><path d="M7 2.5h10v19l-2.5-1.5-2.5 1.5-2.5-1.5L7 21.5z"/><path d="M10 7h4M10 10.5h4M10 14h4"/></symbol>
       <symbol id="i-instalar" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 7v8M8.5 11.5L12 15l3.5-3.5"/></symbol>
     </defs>
   </svg>
@@ -96,18 +99,28 @@
         <button class="barra-boton claro" id="btnRefrescar" aria-label="Actualizar"><svg class="ico"><use href="#i-girar"/></svg></button>
       </div>
       <ul class="lista" id="ultimos"><li class="lista-vacia">Aún no hay registros este año</li></ul>
+      <p class="ayuda centrada" id="ayudaLista" hidden>Toca un registro para verlo, corregirlo o deshacerlo.</p>
+      <button class="btn-texto bloque" id="btnVerMas" hidden>Ver más registros</button>
       <a class="enlace" id="lnkPlanilla" target="_blank" rel="noopener" hidden>Abrir planilla Rendición Caja Chica ›</a>
     </section>
 
     <!-- Páginas capturadas -->
     <section class="vista" id="v-paginas">
-      <p class="ayuda">Toca una página para ajustar el recorte, girarla o borrarla. Si la boleta es larga, toma varias fotos de arriba hacia abajo.</p>
+      <p class="ayuda">Toca una página para ajustar el recorte, girarla o borrarla. Boleta larga: toma fotos de cerca, de arriba hacia abajo, repitiendo 4–5 líneas (¼ de la foto) entre una y otra.</p>
       <div class="paginas" id="paginas"></div>
       <label class="interruptor" id="filaUnir" hidden>
         <input type="checkbox" id="chkUnir">
         <span class="interruptor-pista"></span>
-        <span>Unir en una sola tira (boleta larga)</span>
+        <span>Boleta larga: unir las fotos en una sola imagen</span>
       </label>
+      <div class="tira-vista" id="tiraVista" hidden>
+        <div class="tira-mini"><img id="tiraMini" alt=""></div>
+        <div class="tira-texto">
+          <strong id="tiraTitulo">Boleta completa</strong>
+          <span id="tiraEstado">Uniendo las fotos…</span>
+          <button class="btn btn-secundario btn-chico" id="btnRevisarTira" disabled><svg class="ico"><use href="#i-tira"/></svg>Ver entera y recortar</button>
+        </div>
+      </div>
       <div class="fila-botones">
         <button class="btn btn-secundario" id="btnMasCamara"><svg class="ico"><use href="#i-camara"/></svg>Otra foto</button>
         <button class="btn btn-secundario" id="btnMasGaleria"><svg class="ico"><use href="#i-imagen"/></svg>Galería</button>
@@ -117,6 +130,10 @@
 
     <!-- Datos del gasto -->
     <section class="vista" id="v-datos">
+      <div class="aviso aviso-dorado" id="avisoEdicion" hidden>
+        <svg class="ico"><use href="#i-editar"/></svg>
+        <span id="textoEdicion">Corrigiendo un registro: los cambios quedan en su bitácora.</span>
+      </div>
       <div class="lectura" id="lectura" hidden></div>
       <div class="segmentado" id="segMovimiento" role="radiogroup" aria-label="Tipo de movimiento">
         <button type="button" role="radio" data-valor="Desembolso MP">Gasto MP</button>
@@ -162,7 +179,7 @@
 
         <details class="mas">
           <summary>Más datos</summary>
-          <label class="campo">Rinde<input id="fRinde"></label>
+          <label class="campo" id="campoRinde">Rinde<input id="fRinde"></label>
           <label class="campo">Observaciones<textarea id="fObs" rows="2"></textarea></label>
         </details>
       </form>
@@ -182,8 +199,27 @@
           <a class="btn btn-secundario" id="lnkFila" target="_blank" rel="noopener">Ver planilla</a>
         </div>
         <button class="btn btn-principal btn-grande" id="btnOtro"><svg class="ico"><use href="#i-camara"/></svg>Escanear otro</button>
-        <button class="btn-texto" data-ir="inicio">Volver al inicio</button>
+        <button class="btn-texto" id="btnCorregirListo" hidden>¿Algo quedó mal? Corregir o deshacer</button>
+        <button class="btn-texto suave" data-ir="inicio">Volver al inicio</button>
       </div>
+    </section>
+
+    <!-- Ficha de un registro: ver, corregir, deshacer o anular -->
+    <section class="vista" id="v-registro">
+      <div class="ficha">
+        <div class="ficha-cabeza"><span class="ficha-id" id="rgId"></span><span class="chip" id="rgEstado"></span></div>
+        <strong class="ficha-monto" id="rgMonto"></strong>
+        <span class="ficha-prov" id="rgProveedor"></span>
+        <dl class="ficha-datos" id="rgDatos"></dl>
+      </div>
+      <div class="aviso aviso-ambar" id="rgAviso" hidden><svg class="ico"><use href="#i-alerta"/></svg><span id="rgAvisoTexto"></span></div>
+      <div class="fila-botones">
+        <a class="btn btn-secundario" id="rgPdf" target="_blank" rel="noopener"><svg class="ico"><use href="#i-archivo"/></svg>Ver respaldo</a>
+        <button class="btn btn-secundario" id="rgCorregir"><svg class="ico"><use href="#i-editar"/></svg>Corregir datos</button>
+      </div>
+      <button class="btn btn-peligro" id="rgDeshacer"><svg class="ico"><use href="#i-deshacer"/></svg>Deshacer registro</button>
+      <button class="btn btn-peligro" id="rgAnular" hidden><svg class="ico"><use href="#i-cerrar"/></svg>Anular registro</button>
+      <p class="ayuda" id="rgAyuda">Deshacer quita la fila de la planilla y manda el PDF y su ficha a la papelera de Drive (se recuperan durante 30 días). Sirve para lo recién ingresado, mientras nadie lo haya revisado.</p>
     </section>
 
     <!-- Ajustes -->
@@ -212,9 +248,14 @@
     <div class="marco" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
     <div class="camara-arriba">
       <button class="boton-claro" id="btnCerrarCamara" aria-label="Cerrar"><svg class="ico"><use href="#i-cerrar"/></svg></button>
-      <span class="camara-ayuda">Encuadra el documento completo</span>
+      <span class="camara-ayuda" id="camaraAyuda">Encuadra el documento completo</span>
       <button class="boton-claro" id="btnFlash" aria-label="Linterna" hidden><svg class="ico"><use href="#i-linterna"/></svg></button>
     </div>
+    <div class="camara-modos" role="radiogroup" aria-label="Tipo de documento">
+      <button type="button" role="radio" data-modo="documento" aria-checked="true">Documento</button>
+      <button type="button" role="radio" data-modo="tramos" aria-checked="false">Boleta larga</button>
+    </div>
+    <div class="camara-guia" id="camaraGuia" hidden><span>Sigue desde aquí: repite estas líneas arriba</span><img id="camaraGuiaImg" alt=""></div>
     <div class="camara-abajo">
       <button class="contador" id="contador" aria-label="Ver páginas"><img id="contadorImg" alt=""><span id="contadorNum">0</span></button>
       <button class="disparador" id="btnDisparar" aria-label="Tomar foto"></button>
@@ -241,10 +282,33 @@
     </div>
   </div>
 
+  <!-- Boleta larga: vista completa y recorte del perímetro -->
+  <div class="capa capa-tira" id="capaTira" hidden>
+    <div class="tira-arriba"><strong>Boleta completa</strong><span id="tiraInfo">Arrastra los bordes dorados para recortar.</span></div>
+    <div class="tira-lienzo" id="tiraLienzo">
+      <div class="tira-escena" id="tiraEscena">
+        <img id="tiraImg" alt="Boleta completa">
+        <div class="tira-marco" id="tiraMarco">
+          <span class="tira-asa arriba" data-borde="y0"></span>
+          <span class="tira-asa abajo" data-borde="y1"></span>
+          <span class="tira-asa izq" data-borde="x0"></span>
+          <span class="tira-asa der" data-borde="x1"></span>
+        </div>
+      </div>
+    </div>
+    <div class="editor-barra tira-barra">
+      <button id="tiraModo"><svg class="ico"><use href="#i-tira"/></svg><span id="tiraModoTexto">Una tras otra</span></button>
+      <button id="tiraTodo"><svg class="ico"><use href="#i-completa"/></svg>Sin recorte</button>
+      <button id="tiraAuto"><svg class="ico"><use href="#i-auto"/></svg>Auto</button>
+      <button id="tiraListo" class="primario"><svg class="ico"><use href="#i-check"/></svg>Listo</button>
+    </div>
+  </div>
+
   <div class="dialogo-fondo" id="dialogo" hidden>
     <div class="dialogo" role="dialog" aria-modal="true" aria-labelledby="dialogoTitulo">
       <h3 id="dialogoTitulo"></h3>
       <p id="dialogoTexto"></p>
+      <textarea class="dialogo-campo" id="dialogoCampo" rows="2" hidden></textarea>
       <div class="dialogo-botones">
         <button class="btn btn-secundario" id="dialogoNo">Cancelar</button>
         <button class="btn btn-principal" id="dialogoSi">Aceptar</button>

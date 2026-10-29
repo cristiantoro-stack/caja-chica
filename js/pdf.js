@@ -22,7 +22,7 @@ const Pdf = (() => {
     return `D:${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
   }
 
-  /** paginas: [{ jpeg: Uint8Array, ancho, alto }] → Blob application/pdf */
+  /** paginas: [{ jpeg: Uint8Array, ancho, alto }] → Blob application/pdf. info.fecha fija la fecha (mismo documento = mismos bytes). */
   function crear(paginas, info = {}) {
     const partes = [], posiciones = [];
     let largo = 0;
@@ -41,7 +41,7 @@ const Pdf = (() => {
     objeto(1, '<< /Type /Catalog /Pages 2 0 R >>');
     objeto(2, `<< /Type /Pages /Kids [${paginas.map((_, i) => idPagina(i) + ' 0 R').join(' ')}] /Count ${n} >>`);
     objeto(3, `<< /Title ${textoPdf(info.titulo || 'Respaldo caja chica')} /Author ${textoPdf(info.autor || 'Telconsulting')}`
-      + ` /Creator ${textoPdf('App Caja Chica · Telconsulting')} /CreationDate (${fechaPdf(new Date())}) >>`);
+      + ` /Creator ${textoPdf('App Caja Chica · Telconsulting')} /CreationDate (${fechaPdf(info.fecha || new Date())}) >>`);
 
     paginas.forEach((p, i) => {
       let w = 595.28, h = w * p.alto / p.ancho;

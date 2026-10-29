@@ -124,11 +124,18 @@ const Demo = (() => {
       { codigo: 'ADMTVA-GASVAR-GASCOM', significado: 'Gastos comerciales variables' },
       { codigo: 'nRC-INT-SAT', significado: 'Internet satelital no recurrente' }]
   };
+  const base = { movimiento: 'Desembolso MP', tipoDoc: 'Boleta electrónica', rut: '', ceco: '', medio: 'Tarjeta MP', rinde: 'Demo', observaciones: '', conciliacion: '' };
   const ultimos = [
-    { id: 'CC-2026-0006', fecha: '2026-10-27', proveedor: 'COPEC S.A.', monto: 25990, estado: 'Pendiente revisión', controlTarjeta: '✓ ****1234', respaldoUrl: '#' },
-    { id: 'CC-2026-0005', fecha: '2026-10-24', proveedor: 'Ferretería El Maestro Ltda.', monto: 59500, estado: 'Conciliado', controlTarjeta: '✓ ****1234', respaldoUrl: '#' },
-    { id: 'CC-2026-0004', fecha: '2026-10-22', proveedor: 'Estacionamientos Central', monto: 12490, estado: 'Observado', controlTarjeta: '✗ Otra tarjeta ****5678', respaldoUrl: '#' }
+    Object.assign({}, base, { id: 'CC-2026-0006', fecha: '2026-10-27', proveedor: 'COPEC S.A.', numero: '45872310', rut: '99.520.000-7', monto: 25990,
+      detalle: 'Combustible camioneta', categoria: 'Combustible', estado: 'Pendiente revisión', controlTarjeta: '✓ ****1234', respaldoUrl: '#' }),
+    Object.assign({}, base, { id: 'CC-2026-0005', fecha: '2026-10-24', proveedor: 'Ferretería El Maestro Ltda.', numero: '7781', monto: 59500,
+      detalle: 'Materiales instalación', categoria: 'Materiales y ferretería', estado: 'Conciliado', conciliacion: 'MP 24-10 op 1234',
+      controlTarjeta: '✓ ****1234', respaldoUrl: '#' }),
+    Object.assign({}, base, { id: 'CC-2026-0004', fecha: '2026-10-22', proveedor: 'Estacionamientos Central', numero: '', monto: 12490,
+      tipoDoc: 'Comprobante de pago', detalle: 'Estacionamiento visita cliente', categoria: 'Movilización y estacionamiento',
+      estado: 'Observado', controlTarjeta: '✗ Otra tarjeta ****5678', respaldoUrl: '#' })
   ];
+  const buscar = id => ultimos.find(f => f.id === id);
 
   async function responder(accion, datos) {
     await espera(accion === 'ocr' ? 1600 : accion === 'guardar' ? 1400 : 300);
@@ -137,7 +144,7 @@ const Demo = (() => {
       case 'config': return { ok: true, listas, tarjetas: { mp: '****1234', santander: '' }, planillaUrl: '#', version: 'demo' };
       case 'configurar': return { ok: true, tarjetas: { mp: '****' + (datos.tarjetaMP || '1234'), santander: '' } };
       case 'resumen': return {
-        ok: true, saldo: 154510, planillaUrl: '#', ultimos,
+        ok: true, saldo: 154510, planillaUrl: '#', ultimos: ultimos.slice(0, 5),
         mes: { mes: '2026-10', documentos: 6, desembolsos: 245300, ingresos: 400000, conTarjeta: 5, tarjetaOk: 4 }
       };
       case 'ocr': return {
@@ -148,8 +155,34 @@ const Demo = (() => {
         mercadoPago: false
       };
       case 'guardar': {
-        const id = 'CC-2026-' + String(++correlativo).padStart(4, '0');
+        const id = 'CC-2026-' + String(++correlativo).padStart(4, '0'), d = datos.datos || {};
+        ultimos.unshift(Object.assign({}, base, d, { id, estado: 'Pendiente revisión', controlTarjeta: '✓ ****1234', respaldoUrl: '#',
+          representacion: undefined }));
         return { ok: true, id, fila: 4 + correlativo, respaldoUrl: '#', resumenUrl: '#', planillaUrl: '#', controlTarjeta: '✓ ****1234', alertas: [] };
+      }
+      case 'historial': return { ok: true, filas: ultimos.slice(), total: ultimos.length };
+      case 'registro': {
+        const f = buscar(datos.id);
+        if (!f) return Promise.reject(new Api.ErrorApi('No existe el registro ' + datos.id, 'servidor'));
+        const motivo = f.estado === 'Pendiente revisión' ? '' : 'ya está ' + f.estado.toLowerCase();
+        return { ok: true, registro: Object.assign({}, f), representacion: f.categoria === 'Atención a clientes' ? (f.rep || null) : null, deshacer: { permitido: !motivo, motivo } };
+      }
+      case 'actualizar': {
+        const f = buscar(datos.id);
+        Object.keys(datos.cambios || {}).forEach(k => { if (k === 'representacion') f.rep = datos.cambios[k]; else f[k] = datos.cambios[k]; });
+        return { ok: true, id: datos.id, cambios: Object.keys(datos.cambios || {}) };
+      }
+      case 'deshacer': {
+        const i = ultimos.findIndex(f => f.id === datos.id);
+        if (i >= 0) ultimos.splice(i, 1);
+        const liberado = Number(datos.id.slice(-4)) === correlativo;
+        if (liberado) correlativo--;
+        return { ok: true, id: datos.id, deshecho: true, correlativoLiberado: liberado, archivosEnPapelera: 2 };
+      }
+      case 'anular': {
+        const f = buscar(datos.id);
+        if (f) { f.estado = 'Anulado'; f.observaciones = 'Anulado: ' + datos.motivo; }
+        return { ok: true, id: datos.id, estado: 'Anulado' };
       }
       default: return { ok: true };
     }
