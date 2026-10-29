@@ -1,6 +1,6 @@
 /* App Caja Chica · flujo: capturar → revisar páginas → datos del gasto → guardar en Drive y en la planilla. */
 (() => {
-  const VERSION = '1.0.0';
+  const VERSION = '1.0.1';
   const MAX_BYTES = 20 * 1048576;
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
@@ -133,8 +133,10 @@
         if (previo && previo.focus) previo.focus();
         ok(resultado);
       };
-      $('#dialogoSi').onclick = () => { resultado = true; history.back(); };
-      $('#dialogoNo').onclick = () => { resultado = false; history.back(); };
+      let respondido = false;                       // un doble toque no debe retroceder dos veces
+      const responder = v => { if (respondido) return; respondido = true; resultado = v; history.back(); };
+      $('#dialogoSi').onclick = () => responder(true);
+      $('#dialogoNo').onclick = () => responder(false);
       $('#dialogo').hidden = false;
       history.pushState({ vista: est.vista, prof: profundidad() + 1, dialogo: true }, '');
       $('#dialogoSi').focus();
@@ -245,7 +247,17 @@
       : (items.length === 1 ? '1 documento esperando conexión' : `${items.length} documentos esperando conexión`);
   }
 
-  async function enviarCola(silencioso, incluirBloqueados) {
+  /** Botón "Enviar" del aviso de la cola: si hay documentos que parecen repetidos, pregunta antes de guardarlos. */
+  async function enviarColaManual() {
+    const repetidos = (await Api.pendientes()).filter(i => i.duplicado);
+    let guardarRepetidos = false;
+    if (repetidos.length) {
+      guardarRepetidos = await preguntar('¿Guardar igual?', `${repetidos.length === 1 ? 'Un documento' : repetidos.length + ' documentos'} en espera ${repetidos.length === 1 ? 'parece repetido' : 'parecen repetidos'}: ${repetidos[0].ultimoError}.`, 'Guardar igual', 'No');
+    }
+    enviarCola(false, true, guardarRepetidos);
+  }
+
+  async function enviarCola(silencioso, incluirBloqueados, guardarRepetidos) {
     if (Api.demo) return;
     if (!Api.configurada() || !navigator.onLine) {
       if (!silencioso) toast(Api.configurada() ? 'Sin conexión a internet' : 'Primero vincula la app en Ajustes');
@@ -254,7 +266,7 @@
     const n = await Api.enviarCola((r, item, e) => {
       if (r) toast(`${r.id} enviado a Drive`);
       else if (e && e.datos && e.datos.duplicado) toast(`Ya estaba registrado como ${e.datos.duplicado.id}`);
-    }, incluirBloqueados);
+    }, incluirBloqueados, guardarRepetidos);
     await pintarCola();
     if (n) refrescarResumen(false);
   }
@@ -819,7 +831,8 @@
     if (d.representacion && !d.representacion.empresa) return falla('#fEmpresa', 'Falta la empresa cliente');
     if (d.representacion && !d.representacion.motivo) return falla('#fMotivo', 'Falta el motivo comercial');
     if (d.rut && !validarRut()) return falla('#fRut', 'Revisa el RUT del proveedor (o déjalo vacío)');
-    if (d.ceco && !validarCeco()) return falla('#fCeco', 'El centro de costo no está en el catálogo oficial');
+    // Sin las listas del servidor no se bloquea el CeCo: el servidor lo valida igual y deja la alerta.
+    if (d.ceco && est.listas && !validarCeco()) return falla('#fCeco', 'El centro de costo no está en el catálogo oficial');
     return null;
   }
 
@@ -1055,7 +1068,7 @@
     $('#btnGaleria').onclick = async () => { if (await descartarSiHay()) { nuevaCaptura(); $('#inGaleria').click(); } };
     $('#btnPdf').onclick = async () => { if (await descartarSiHay()) { nuevaCaptura(); $('#inPdf').click(); } };
     $('#btnRefrescar').onclick = () => refrescarResumen(true);
-    $('#btnEnviarCola').onclick = () => enviarCola(false, true);
+    $('#btnEnviarCola').onclick = enviarColaManual;
     $('#btnDescartarCola').onclick = descartarBloqueados;
     $('#btnRetomar').onclick = () => { $('#avisoSesion').hidden = true; pintarPaginas(); ir('paginas'); };
     $('#btnDescartar').onclick = () => { nuevaCaptura(); $('#avisoSesion').hidden = true; };

@@ -55,28 +55,38 @@ const Api = (() => {
 
   /** Envía lo que esté en cola, de a un envío a la vez. Los que fallaron 3 veces solo se reintentan a pedido. */
   let envioEnCurso = null;
-  function enviarCola(alAvanzar, incluirBloqueados) {
+  function enviarCola(alAvanzar, incluirBloqueados, guardarRepetidos) {
     if (demo) return Promise.resolve(0);
     if (!envioEnCurso) {
-      envioEnCurso = enviarPendientes(alAvanzar, !!incluirBloqueados).finally(() => { envioEnCurso = null; });
+      envioEnCurso = enviarPendientes(alAvanzar, !!incluirBloqueados, !!guardarRepetidos).finally(() => { envioEnCurso = null; });
     }
     return envioEnCurso;
   }
 
-  async function enviarPendientes(alAvanzar, incluirBloqueados) {
+  async function enviarPendientes(alAvanzar, incluirBloqueados, guardarRepetidos) {
     let enviados = 0;
     for (const item of await pendientes()) {
       if ((item.intentos || 0) >= 3 && !incluirBloqueados) continue;
+      if (item.duplicado && !guardarRepetidos) continue;     // un "parecido" solo se guarda si la persona lo confirma
       try {
-        const r = await llamar('guardar', item.payload, { espera: 150000 });
+        const payload = item.duplicado ? Object.assign({}, item.payload, { forzar: true }) : item.payload;
+        const r = await llamar('guardar', payload, { espera: 150000 });
         await DB.borrar('cola', item.id);
         enviados++;
         if (alAvanzar) alAvanzar(r, item, null);
       } catch (e) {
         if (e.codigo === 'red' || e.codigo === 'config' || e.codigo === 'clave') break;
-        if (e.codigo === 'duplicado') {           // ya había llegado (se perdió la respuesta): no se repite
-          await DB.borrar('cola', item.id);
-          if (alAvanzar) alAvanzar(null, item, e);
+        if (e.codigo === 'duplicado') {
+          const dup = e.datos && e.datos.duplicado;
+          if (dup && dup.mismoArchivo) {          // ya había llegado (se perdió la respuesta): no se repite
+            await DB.borrar('cola', item.id);
+            if (alAvanzar) alAvanzar(null, item, e);
+            continue;
+          }
+          item.intentos = 3;                      // parecido a otro registro: queda retenido hasta que la persona decida
+          item.duplicado = dup || true;
+          item.ultimoError = dup ? `parece repetido de ${dup.id} (${dup.motivo})` : 'parece repetido';
+          await DB.guardar('cola', item.id, item);
           continue;
         }
         item.intentos = (item.intentos || 0) + 1;
