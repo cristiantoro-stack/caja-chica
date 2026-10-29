@@ -1,6 +1,6 @@
 /* App Caja Chica · flujo: capturar → revisar páginas → datos del gasto → guardar en Drive y en la planilla. */
 (() => {
-  const VERSION = '1.0.1';
+  const VERSION = '1.0.2';
   const MAX_BYTES = 20 * 1048576;
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
@@ -1057,6 +1057,38 @@
     imagenes.forEach(a => agregarFoto(a.blob, 'compartido'));
   }
 
+  // ---------- Instalación en el teléfono ----------
+
+  /** Botón "Instalar" propio: Chrome ofrece la instalación y la app la muestra sin tener que buscarla en el menú. */
+  function prepararInstalacion() {
+    const instalada = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+    if (instalada) return;
+    let pedido = null;
+    window.addEventListener('beforeinstallprompt', e => {
+      e.preventDefault();
+      pedido = e;
+      $('#avisoInstalar').hidden = false;
+      $('#avisoNavegador').hidden = true;
+    });
+    window.addEventListener('appinstalled', () => {
+      pedido = null;
+      $('#avisoInstalar').hidden = true;
+      toast('App instalada ✓ Ábrela desde el ícono "Caja Chica"', 6000);
+    });
+    $('#btnInstalar').onclick = async () => {
+      if (!pedido) return;
+      pedido.prompt();
+      const r = await pedido.userChoice.catch(() => null);
+      pedido = null;
+      $('#avisoInstalar').hidden = true;
+      if (r && r.outcome === 'accepted') toast('Instalando… aparecerá el ícono "Caja Chica"', 6000);
+    };
+    // Navegadores que no instalan apps (p. ej. el de Xiaomi): se indica abrir el enlace en Chrome
+    if (/MiuiBrowser|XiaoMi|HeyTap|OPR\/|Firefox/i.test(navigator.userAgent) || !/Chrome\//.test(navigator.userAgent)) {
+      $('#avisoNavegador').hidden = false;
+    }
+  }
+
   // ---------- Eventos ----------
 
   function enlazar() {
@@ -1156,6 +1188,7 @@
     $('#avisoDemo').hidden = !Api.demo;
     est.listas = leerLocal('listas');
     est.tarjetas = leerLocal('tarjetas') || {};
+    prepararInstalacion();
     enlazar();
     await restaurarSesion();
     mostrar('inicio');

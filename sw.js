@@ -1,5 +1,5 @@
 /* Service worker: deja la app disponible sin conexión y recibe archivos compartidos desde otras apps. */
-const VERSION = 'caja-chica-1.0.1';
+const VERSION = 'caja-chica-1.0.2';
 const ARCHIVOS = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest', 'logo.svg', 'logo-simbolo.svg',
   'js/db.js', 'js/escaner.js', 'js/pdf.js', 'js/api.js', 'js/app.js',

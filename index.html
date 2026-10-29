@@ -31,6 +31,7 @@
       <symbol id="i-completa" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1.5"/></symbol>
       <symbol id="i-contraste" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor"/></symbol>
       <symbol id="i-nube" viewBox="0 0 24 24"><path d="M7 18.5h10.5a4 4 0 0 0 .4-8 6 6 0 0 0-11.6 1.4A3.3 3.3 0 0 0 7 18.5z"/></symbol>
+      <symbol id="i-instalar" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 7v8M8.5 11.5L12 15l3.5-3.5"/></symbol>
     </defs>
   </svg>
 
@@ -45,6 +46,15 @@
   <main>
     <!-- Inicio -->
     <section class="vista activa" id="v-inicio">
+      <div class="aviso aviso-dorado" id="avisoInstalar" hidden>
+        <svg class="ico"><use href="#i-instalar"/></svg>
+        <span>Instala la app para abrirla desde su ícono, sin el navegador.</span>
+        <button class="btn btn-principal btn-chico" id="btnInstalar">Instalar</button>
+      </div>
+      <div class="aviso aviso-ambar" id="avisoNavegador" hidden>
+        <svg class="ico"><use href="#i-alerta"/></svg>
+        <span>Para instalarla, abre este enlace en <b>Chrome</b>: este navegador no instala apps.</span>
+      </div>
       <div class="aviso aviso-ambar" id="avisoConfig" hidden>
         <svg class="ico"><use href="#i-alerta"/></svg>
         <span>Falta vincular la app con Drive.</span>
