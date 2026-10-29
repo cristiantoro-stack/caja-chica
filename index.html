@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src https://script.google.com https://script.googleusercontent.com; media-src 'self' blob: mediastream:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#12181f">
+  <meta name="description" content="Escanea boletas y facturas de la caja chica, respáldalas en Drive y regístralas en la planilla.">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Caja Chica</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-camara" viewBox="0 0 24 24"><path d="M3 8.5h3.2L8 6h8l1.8 2.5H21V19H3z"/><circle cx="12" cy="13.2" r="3.6"/></symbol>
+      <symbol id="i-imagen" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16.5l-5-5-9.5 8.5"/></symbol>
+      <symbol id="i-archivo" viewBox="0 0 24 24"><path d="M6 3h8.5L19 7.5V21H6z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+      <symbol id="i-ajustes" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></symbol>
+      <symbol id="i-volver" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+      <symbol id="i-girar" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v5h-5"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></symbol>
+      <symbol id="i-alerta" viewBox="0 0 24 24"><path d="M12 3.5l9.5 16.5h-19z"/><path d="M12 10v4.5M12 17.2v.3"/></symbol>
+      <symbol id="i-cerrar" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+      <symbol id="i-linterna" viewBox="0 0 24 24"><path d="M13 2.5L5.5 13.5h6l-1 8 8-11.5h-6z"/></symbol>
+      <symbol id="i-basura" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V4h5v3M6 7l1 13.5h10L18 7"/></symbol>
+      <symbol id="i-auto" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></symbol>
+      <symbol id="i-completa" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1.5"/></symbol>
+      <symbol id="i-contraste" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor"/></symbol>
+      <symbol id="i-nube" viewBox="0 0 24 24"><path d="M7 18.5h10.5a4 4 0 0 0 .4-8 6 6 0 0 0-11.6 1.4A3.3 3.3 0 0 0 7 18.5z"/></symbol>
+    </defs>
+  </svg>
+
+  <header class="barra">
+    <button class="barra-boton" id="btnVolver" aria-label="Volver" hidden><svg class="ico"><use href="#i-volver"/></svg></button>
+    <img class="barra-logo" src="logo-simbolo.svg" alt="Telconsulting" id="barraLogo">
+    <div class="barra-titulo"><strong id="tituloVista">Caja Chica</strong><span>Mercado Pago · Telconsulting</span></div>
+    <button class="barra-boton" id="btnAjustes" aria-label="Ajustes"><svg class="ico"><use href="#i-ajustes"/></svg></button>
+  </header>
+  <div class="aviso-demo" id="avisoDemo" hidden>Modo demostración: no se guarda nada en Drive</div>
+
+  <main>
+    <!-- Inicio -->
+    <section class="vista activa" id="v-inicio">
+      <div class="aviso aviso-ambar" id="avisoConfig" hidden>
+        <svg class="ico"><use href="#i-alerta"/></svg>
+        <span>Falta vincular la app con Drive.</span>
+        <button class="btn-texto" data-ir="ajustes">Configurar</button>
+      </div>
+
+      <div class="tablero">
+        <div class="tablero-mes" id="kpiMes">Este mes</div>
+        <div class="tablero-principal"><span>Rendido en el mes</span><strong id="kpiMonto">—</strong></div>
+        <div class="tablero-grilla">
+          <div><span>Documentos</span><strong id="kpiDocs">—</strong></div>
+          <div><span>Tarjeta ✓</span><strong id="kpiTarjeta">—</strong></div>
+          <div><span>Saldo caja</span><strong id="kpiSaldo">—</strong></div>
+        </div>
+      </div>
+
+      <button class="btn btn-principal btn-grande" id="btnEscanear">
+        <svg class="ico"><use href="#i-camara"/></svg>Escanear documento
+      </button>
+      <div class="fila-botones">
+        <button class="btn btn-secundario" id="btnGaleria"><svg class="ico"><use href="#i-imagen"/></svg>Galería</button>
+        <button class="btn btn-secundario" id="btnPdf"><svg class="ico"><use href="#i-archivo"/></svg>Subir PDF</button>
+      </div>
+
+      <div class="aviso aviso-oscuro" id="avisoSesion" hidden>
+        <span id="textoSesion">Tienes una captura sin terminar.</span>
+        <button class="btn-texto" id="btnRetomar">Continuar</button>
+        <button class="btn-texto suave" id="btnDescartar">Descartar</button>
+      </div>
+      <div class="aviso aviso-ambar" id="avisoCola" hidden>
+        <svg class="ico"><use href="#i-nube"/></svg>
+        <span id="textoCola">Documentos esperando conexión</span>
+        <button class="btn-texto" id="btnEnviarCola">Enviar</button>
+        <button class="btn-texto suave" id="btnDescartarCola" hidden>Descartar</button>
+      </div>
+
+      <div class="seccion-titulo">
+        <h2>Últimos registros</h2>
+        <button class="barra-boton claro" id="btnRefrescar" aria-label="Actualizar"><svg class="ico"><use href="#i-girar"/></svg></button>
+      </div>
+      <ul class="lista" id="ultimos"><li class="lista-vacia">Aún no hay registros este año</li></ul>
+      <a class="enlace" id="lnkPlanilla" target="_blank" rel="noopener" hidden>Abrir planilla Rendición Caja Chica ›</a>
+    </section>
+
+    <!-- Páginas capturadas -->
+    <section class="vista" id="v-paginas">
+      <p class="ayuda">Toca una página para ajustar el recorte, girarla o borrarla. Si la boleta es larga, toma varias fotos de arriba hacia abajo.</p>
+      <div class="paginas" id="paginas"></div>
+      <label class="interruptor" id="filaUnir" hidden>
+        <input type="checkbox" id="chkUnir">
+        <span class="interruptor-pista"></span>
+        <span>Unir en una sola tira (boleta larga)</span>
+      </label>
+      <div class="fila-botones">
+        <button class="btn btn-secundario" id="btnMasCamara"><svg class="ico"><use href="#i-camara"/></svg>Otra foto</button>
+        <button class="btn btn-secundario" id="btnMasGaleria"><svg class="ico"><use href="#i-imagen"/></svg>Galería</button>
+      </div>
+      <div class="pie"><button class="btn btn-principal" id="btnContinuar">Continuar</button></div>
+    </section>
+
+    <!-- Datos del gasto -->
+    <section class="vista" id="v-datos">
+      <div class="lectura" id="lectura" hidden></div>
+      <div class="segmentado" id="segMovimiento" role="radiogroup" aria-label="Tipo de movimiento">
+        <button type="button" role="radio" data-valor="Desembolso MP">Gasto MP</button>
+        <button type="button" role="radio" data-valor="Ingreso caja chica">Ingreso</button>
+        <button type="button" role="radio" data-valor="Rendición Santander">Santander</button>
+      </div>
+
+      <form id="form" novalidate autocomplete="off">
+        <div>
+          <div class="campo">
+            <label for="fFecha">Fecha del documento</label>
+            <div class="con-boton"><input type="date" id="fFecha" required><button type="button" class="btn-mini" id="btnHoy">Hoy</button></div>
+          </div>
+          <label class="campo">Monto<input type="text" inputmode="numeric" id="fMonto" placeholder="$0" required></label>
+        </div>
+        <div class="nota nota-ambar" id="sugMonto" hidden></div>
+        <div class="control" id="controlTarjeta" hidden></div>
+
+        <label class="campo">Detalle<textarea id="fDetalle" rows="2" placeholder="¿Qué se compró y para qué?" required></textarea></label>
+
+        <div class="campo" id="grupoCategoria">
+          <span class="campo-etiqueta">Categoría</span>
+          <div class="chips" id="chipsCategoria"></div>
+        </div>
+        <div class="representacion" id="grupoRepresentacion" hidden>
+          <p class="ayuda">Atención a clientes: estos datos respaldan el gasto (art. 31 LIR).</p>
+          <label class="campo">Empresa cliente<input id="fEmpresa"></label>
+          <label class="campo">Asistentes (nombre y cargo)<textarea id="fAsistentes" rows="2"></textarea></label>
+          <label class="campo">Motivo comercial<input id="fMotivo"></label>
+        </div>
+
+        <div class="campos-2">
+          <label class="campo">Tipo de documento<select id="fTipo"></select></label>
+          <label class="campo">N° documento<input id="fNumero" inputmode="numeric"></label>
+        </div>
+        <label class="campo" id="campoProveedor">Proveedor<input id="fProveedor"></label>
+        <div class="campos-2">
+          <label class="campo" id="campoRut">RUT proveedor<input id="fRut" placeholder="76.123.456-7"><small id="rutEstado"></small></label>
+          <label class="campo">Medio de pago<select id="fMedio"></select></label>
+        </div>
+        <label class="campo" id="campoCeco">Centro de costo<input id="fCeco" list="listaCecos" placeholder="Opcional"><small id="cecoEstado"></small></label>
+        <datalist id="listaCecos"></datalist>
+
+        <details class="mas">
+          <summary>Más datos</summary>
+          <label class="campo">Rinde<input id="fRinde"></label>
+          <label class="campo">Observaciones<textarea id="fObs" rows="2"></textarea></label>
+        </details>
+      </form>
+      <div class="pie"><button class="btn btn-principal" id="btnGuardar">Guardar en Drive</button></div>
+    </section>
+
+    <!-- Resultado -->
+    <section class="vista" id="v-listo">
+      <div class="listo">
+        <div class="listo-icono" id="listoIcono"><svg class="ico"><use href="#i-check"/></svg></div>
+        <h2 id="listoTitulo">Guardado</h2>
+        <p class="listo-id" id="listoId"></p>
+        <p id="listoDetalle"></p>
+        <div class="listo-controles" id="listoControles"></div>
+        <div class="fila-botones" id="listoEnlaces">
+          <a class="btn btn-secundario" id="lnkPdf" target="_blank" rel="noopener">Ver respaldo</a>
+          <a class="btn btn-secundario" id="lnkFila" target="_blank" rel="noopener">Ver planilla</a>
+        </div>
+        <button class="btn btn-principal btn-grande" id="btnOtro"><svg class="ico"><use href="#i-camara"/></svg>Escanear otro</button>
+        <button class="btn-texto" data-ir="inicio">Volver al inicio</button>
+      </div>
+    </section>
+
+    <!-- Ajustes -->
+    <section class="vista" id="v-ajustes">
+      <h2 class="seccion">Conexión con Drive</h2>
+      <label class="campo">Dirección del servidor<input id="aUrl" type="url" placeholder="https://script.google.com/macros/s/…/exec"></label>
+      <label class="campo">Clave de acceso<input id="aToken" type="password"></label>
+      <h2 class="seccion">Quién rinde</h2>
+      <label class="campo">Nombre<input id="aNombre" placeholder="Nombre y apellido"></label>
+      <h2 class="seccion">Control de tarjeta</h2>
+      <p class="ayuda">Solo los últimos 4 dígitos. La app los busca en cada boleta para confirmar que se pagó con la tarjeta de la empresa.</p>
+      <div class="campos-2">
+        <label class="campo">Tarjeta Mercado Pago<input id="aTarjetaMP" inputmode="numeric" maxlength="4" placeholder="Últimos 4"></label>
+        <label class="campo">Tarjeta Santander<input id="aTarjetaSan" inputmode="numeric" maxlength="4" placeholder="Opcional"></label>
+      </div>
+      <button class="btn btn-principal" id="btnGuardarAjustes">Guardar ajustes</button>
+      <button class="btn btn-secundario" id="btnProbar">Probar conexión</button>
+      <p class="estado-conexion" id="estadoConexion"></p>
+      <p class="version" id="version"></p>
+    </section>
+  </main>
+
+  <!-- Cámara -->
+  <div class="capa capa-camara" id="capaCamara" hidden>
+    <video id="video" playsinline muted autoplay></video>
+    <div class="marco" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="camara-arriba">
+      <button class="boton-claro" id="btnCerrarCamara" aria-label="Cerrar"><svg class="ico"><use href="#i-cerrar"/></svg></button>
+      <span class="camara-ayuda">Encuadra el documento completo</span>
+      <button class="boton-claro" id="btnFlash" aria-label="Linterna" hidden><svg class="ico"><use href="#i-linterna"/></svg></button>
+    </div>
+    <div class="camara-abajo">
+      <button class="contador" id="contador" aria-label="Ver páginas"><img id="contadorImg" alt=""><span id="contadorNum">0</span></button>
+      <button class="disparador" id="btnDisparar" aria-label="Tomar foto"></button>
+      <button class="btn-listo" id="btnListoCamara">Listo</button>
+    </div>
+    <div class="destello" id="destello"></div>
+  </div>
+
+  <!-- Editor de recorte -->
+  <div class="capa capa-editor" id="capaEditor" hidden>
+    <div class="editor-lienzo" id="editorLienzo">
+      <div class="editor-escena" id="editorEscena">
+        <canvas id="editorCanvas"></canvas>
+        <svg id="editorSvg"></svg>
+      </div>
+    </div>
+    <div class="editor-barra">
+      <button id="edGirar"><svg class="ico"><use href="#i-girar"/></svg>Girar</button>
+      <button id="edAuto"><svg class="ico"><use href="#i-auto"/></svg>Auto</button>
+      <button id="edTodo"><svg class="ico"><use href="#i-completa"/></svg>Completa</button>
+      <button id="edModo"><svg class="ico"><use href="#i-contraste"/></svg><span id="edModoTexto">B/N</span></button>
+      <button id="edBorrar"><svg class="ico"><use href="#i-basura"/></svg>Borrar</button>
+      <button id="edListo" class="primario"><svg class="ico"><use href="#i-check"/></svg>Listo</button>
+    </div>
+  </div>
+
+  <div class="dialogo-fondo" id="dialogo" hidden>
+    <div class="dialogo" role="dialog" aria-modal="true" aria-labelledby="dialogoTitulo">
+      <h3 id="dialogoTitulo"></h3>
+      <p id="dialogoTexto"></p>
+      <div class="dialogo-botones">
+        <button class="btn btn-secundario" id="dialogoNo">Cancelar</button>
+        <button class="btn btn-principal" id="dialogoSi">Aceptar</button>
+      </div>
+    </div>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <input type="file" id="inCamaraNativa" accept="image/*" capture="environment" hidden>
+  <input type="file" id="inGaleria" accept="image/*" multiple hidden>
+  <input type="file" id="inPdf" accept="application/pdf" hidden>
+
+  <script src="js/db.js"></script>
+  <script src="js/escaner.js"></script>
+  <script src="js/pdf.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
