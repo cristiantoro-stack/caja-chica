@@ -34,6 +34,10 @@
       <symbol id="i-editar" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></symbol>
       <symbol id="i-deshacer" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
       <symbol id="i-tira" viewBox="0 0 24 24"><path d="M7 2.5h10v19l-2.5-1.5-2.5 1.5-2.5-1.5L7 21.5z"/><path d="M10 7h4M10 10.5h4M10 14h4"/></symbol>
+      <symbol id="i-tarjeta" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19M6 15h4"/></symbol>
+      <symbol id="i-qr" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"/><path d="M14 14h2.5v2.5H14zM17.5 17.5H20V20h-2.5zM14 18.5v1.5M18.5 14H20"/></symbol>
+      <symbol id="i-ubicacion" viewBox="0 0 24 24"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.4"/></symbol>
+      <symbol id="i-firma" viewBox="0 0 24 24"><path d="M3 17c2.5-4 4.5-9 6.5-9 1.6 0 .2 6.5 2 6.5s2.6-4 4.3-4c1.2 0 .7 3 2.2 3H21"/><path d="M3 20.5h18"/></symbol>
       <symbol id="i-instalar" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 7v8M8.5 11.5L12 15l3.5-3.5"/></symbol>
     </defs>
   </svg>
@@ -74,6 +78,15 @@
         </div>
       </div>
 
+      <div class="custodia" id="custodia">
+        <svg class="ico"><use href="#i-tarjeta"/></svg>
+        <div class="custodia-texto">
+          <strong id="custodiaTarjeta">Tarjeta Mercado Pago</strong>
+          <span id="custodiaTitular">Sin entregas registradas</span>
+        </div>
+        <button class="btn btn-secundario btn-chico" id="btnEntrega">Entregar</button>
+      </div>
+
       <button class="btn btn-principal btn-grande" id="btnEscanear">
         <svg class="ico"><use href="#i-camara"/></svg>Escanear documento
       </button>
@@ -86,6 +99,11 @@
         <span id="textoSesion">Tienes una captura sin terminar.</span>
         <button class="btn-texto" id="btnRetomar">Continuar</button>
         <button class="btn-texto suave" id="btnDescartar">Descartar</button>
+      </div>
+      <div class="aviso aviso-oscuro" id="avisoActa" hidden>
+        <span id="textoActa">Tienes un acta sin terminar.</span>
+        <button class="btn-texto" id="btnSeguirActa">Seguir</button>
+        <button class="btn-texto suave" id="btnDescartarActa">Descartar</button>
       </div>
       <div class="aviso aviso-ambar" id="avisoCola" hidden>
         <svg class="ico"><use href="#i-nube"/></svg>
@@ -222,6 +240,87 @@
       <p class="ayuda" id="rgAyuda">Deshacer quita la fila de la planilla y manda el PDF y su ficha a la papelera de Drive (se recuperan durante 30 días). Sirve para lo recién ingresado, mientras nadie lo haya revisado.</p>
     </section>
 
+    <!-- Entrega o devolución de la tarjeta: acta con lugar, momento y firma de ambos -->
+    <section class="vista" id="v-entrega">
+      <div class="segmentado dos" id="segEntrega" role="radiogroup" aria-label="Tipo de acta">
+        <button type="button" role="radio" data-valor="Entrega">Entrega</button>
+        <button type="button" role="radio" data-valor="Devolución">Devolución</button>
+      </div>
+
+      <h2 class="seccion">1 · Tarjeta</h2>
+      <button class="btn btn-secundario" id="btnLeerQr"><svg class="ico"><use href="#i-qr"/></svg>Escanear el QR de la tarjeta</button>
+      <div class="campos-2 con-margen">
+        <label class="campo">Últimos 4 dígitos<input id="eUltimos4" inputmode="numeric" maxlength="4" placeholder="1234" autocomplete="off"></label>
+        <div class="campo"><span class="campo-etiqueta">QR</span><small class="qr-estado" id="eQrEstado">Sin escanear</small></div>
+      </div>
+
+      <h2 class="seccion">2 · Quién entrega y quién recibe</h2>
+      <div class="persona">
+        <span class="persona-titulo" id="tituloEntrega">Entrega</span>
+        <label class="campo">Nombre y apellido<input id="eEntregaNombre" maxlength="120" autocomplete="off"></label>
+        <div class="campos-2">
+          <label class="campo">RUT<input id="eEntregaRut" maxlength="14" placeholder="12.345.678-9" autocomplete="off"><small id="eEntregaRutEstado"></small></label>
+          <label class="campo">Cargo<input id="eEntregaCargo" maxlength="120" autocomplete="off"></label>
+        </div>
+      </div>
+      <div class="persona">
+        <span class="persona-titulo" id="tituloRecibe">Recibe</span>
+        <label class="campo">Nombre y apellido<input id="eRecibeNombre" maxlength="120" autocomplete="off"></label>
+        <div class="campos-2">
+          <label class="campo">RUT<input id="eRecibeRut" maxlength="14" placeholder="12.345.678-9" autocomplete="off"><small id="eRecibeRutEstado"></small></label>
+          <label class="campo">Cargo o área<input id="eRecibeCargo" maxlength="120" autocomplete="off"></label>
+        </div>
+        <label class="campo">Correo (opcional)<input id="eRecibeCorreo" type="email" inputmode="email" maxlength="120" autocomplete="off"></label>
+      </div>
+
+      <h2 class="seccion">3 · Lugar, momento y condiciones</h2>
+      <div class="control info" id="eUbicacion"><svg class="ico"><use href="#i-ubicacion"/></svg><span id="eUbicacionTexto">Buscando la ubicación…</span><button type="button" class="btn-texto" id="btnReubicar" hidden>Reintentar</button></div>
+      <label class="campo">Lugar<input id="eLugar" maxlength="300" placeholder="Ej: oficina Granaderos, obra Colbún" autocomplete="off"></label>
+      <div class="campos-2">
+        <label class="campo">Saldo de la tarjeta<input id="eSaldo" inputmode="numeric" maxlength="14" placeholder="$0" autocomplete="off"></label>
+        <label class="campo" id="campoDevolucion">Devolución prevista<input id="eDevolucionPrevista" type="date"></label>
+      </div>
+      <label class="campo" id="campoUso">Uso autorizado<textarea id="eMotivo" rows="2" maxlength="600" placeholder="Ej: gastos de terreno del proyecto Colbún"></textarea></label>
+      <div class="foto-entrega">
+        <button type="button" class="btn btn-secundario" id="btnFotoEntrega"><svg class="ico"><use href="#i-camara"/></svg><span id="eFotoTexto">Foto del momento (opcional)</span></button>
+        <img id="eFotoMini" alt="Foto del momento" hidden>
+      </div>
+      <p class="ayuda">Foto de la persona con la tarjeta, sin que se vea el número completo.</p>
+
+      <h2 class="seccion">4 · Conformidad</h2>
+      <p class="declaracion" id="eDeclaracion"></p>
+      <div class="firma">
+        <div class="firma-cabeza"><span id="eFirmaEntregaTitulo">Firma de quien entrega</span><button type="button" class="btn-texto" data-borrar="entrega">Borrar</button></div>
+        <canvas id="firmaEntrega" aria-label="Firma de quien entrega"></canvas>
+      </div>
+      <div class="firma">
+        <div class="firma-cabeza"><span id="eFirmaRecibeTitulo">Firma de quien recibe</span><button type="button" class="btn-texto" data-borrar="recibe">Borrar</button></div>
+        <canvas id="firmaRecibe" aria-label="Firma de quien recibe"></canvas>
+      </div>
+      <label class="interruptor">
+        <input type="checkbox" id="eConforme">
+        <span class="interruptor-pista"></span>
+        <span>Ambos leímos la declaración y estamos conformes</span>
+      </label>
+      <div class="pie"><button class="btn btn-principal" id="btnRegistrarEntrega">Registrar entrega</button></div>
+    </section>
+
+    <!-- Resultado del acta -->
+    <section class="vista" id="v-acta">
+      <div class="listo">
+        <div class="listo-icono" id="actaIcono"><svg class="ico"><use href="#i-check"/></svg></div>
+        <h2 id="actaTitulo">Entrega registrada</h2>
+        <p class="listo-id" id="actaId"></p>
+        <p id="actaDetalle"></p>
+        <div class="listo-controles" id="actaControles"></div>
+        <div class="fila-botones" id="actaEnlaces">
+          <a class="btn btn-secundario" id="lnkActa" target="_blank" rel="noopener">Ver acta</a>
+          <a class="btn btn-secundario" id="lnkActaPlanilla" target="_blank" rel="noopener">Ver planilla</a>
+        </div>
+        <button class="btn btn-principal btn-grande" data-ir="inicio">Volver al inicio</button>
+      </div>
+    </section>
+
     <!-- Ajustes -->
     <section class="vista" id="v-ajustes">
       <h2 class="seccion">Conexión con Drive</h2>
@@ -229,6 +328,10 @@
       <label class="campo">Clave de acceso<input id="aToken" type="password"></label>
       <h2 class="seccion">Quién rinde</h2>
       <label class="campo">Nombre<input id="aNombre" placeholder="Nombre y apellido"></label>
+      <div class="campos-2">
+        <label class="campo">RUT<input id="aRut" placeholder="12.345.678-9"></label>
+        <label class="campo">Cargo<input id="aCargo" placeholder="Ej: Administración y Finanzas"></label>
+      </div>
       <h2 class="seccion">Control de tarjeta</h2>
       <p class="ayuda">Solo los últimos 4 dígitos. La app los busca en cada boleta para confirmar que se pagó con la tarjeta de la empresa.</p>
       <div class="campos-2">
@@ -262,6 +365,16 @@
       <button class="btn-listo" id="btnListoCamara">Listo</button>
     </div>
     <div class="destello" id="destello"></div>
+  </div>
+
+  <!-- Lector del QR de la tarjeta -->
+  <div class="capa capa-camara capa-qr" id="capaQr" hidden>
+    <video id="videoQr" playsinline muted autoplay></video>
+    <div class="marco-qr" aria-hidden="true"></div>
+    <div class="camara-arriba">
+      <span class="camara-ayuda">Apunta al código QR de la tarjeta</span>
+      <button class="boton-claro" id="btnCerrarQr" aria-label="Cerrar"><svg class="ico"><use href="#i-cerrar"/></svg></button>
+    </div>
   </div>
 
   <!-- Editor de recorte -->
@@ -320,10 +433,12 @@
   <input type="file" id="inCamaraNativa" accept="image/*" capture="environment" hidden>
   <input type="file" id="inGaleria" accept="image/*" multiple hidden>
   <input type="file" id="inPdf" accept="application/pdf" hidden>
+  <input type="file" id="inFotoEntrega" accept="image/*" capture="environment" hidden>
 
   <script src="js/db.js"></script>
   <script src="js/escaner.js"></script>
   <script src="js/pdf.js"></script>
+  <script src="js/custodia.js"></script>
   <script src="js/api.js"></script>
   <script src="js/app.js"></script>
 </body>

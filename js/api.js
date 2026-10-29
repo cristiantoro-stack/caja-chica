@@ -45,9 +45,10 @@ const Api = (() => {
 
   // ---------- Cola sin conexión ----------
 
-  async function encolar(payload) {
+  /** Guarda un envío para cuando vuelva la conexión. accion: 'guardar' (documento) o 'entregarTarjeta' (acta). */
+  async function encolar(payload, accion) {
     const id = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    await DB.guardar('cola', id, { id, payload, creado: new Date().toISOString(), intentos: 0 });
+    await DB.guardar('cola', id, { id, accion: accion || 'guardar', payload, creado: new Date().toISOString(), intentos: 0 });
     return id;
   }
 
@@ -63,14 +64,39 @@ const Api = (() => {
     return envioEnCurso;
   }
 
+  const enVuelo = new Set();          // envíos que la app está mandando ahora mismo (la cola no los repite en paralelo)
+
+  /**
+   * Envía YA un elemento de la cola (el acta recién firmada: se guarda primero en el teléfono y después se manda).
+   * Bien → se borra de la cola y devuelve la respuesta. Sin red o sin respuesta → queda en la cola y lanza el error.
+   * El servidor la rechaza → se saca de la cola y lanza el error (para corregir los datos en pantalla).
+   */
+  async function enviarUno(id, espera) {
+    const item = await DB.leer('cola', id);
+    if (!item) throw new ErrorApi('El envío ya no está en el teléfono', 'servidor');
+    enVuelo.add(id);
+    try {
+      const r = await llamar(item.accion || 'guardar', item.payload, { espera: espera || 150000 });
+      await DB.borrar('cola', id);
+      return r;
+    } catch (e) {
+      if (e.codigo !== 'red' && e.codigo !== 'config' && e.codigo !== 'clave') await DB.borrar('cola', id);
+      throw e;
+    } finally {
+      enVuelo.delete(id);
+    }
+  }
+
   async function enviarPendientes(alAvanzar, incluirBloqueados, guardarRepetidos) {
     let enviados = 0;
     for (const item of await pendientes()) {
+      if (enVuelo.has(item.id)) continue;
       if ((item.intentos || 0) >= 3 && !incluirBloqueados) continue;
       if (item.duplicado && !guardarRepetidos) continue;     // un "parecido" solo se guarda si la persona lo confirma
       try {
         const payload = item.duplicado ? Object.assign({}, item.payload, { forzar: true }) : item.payload;
-        const r = await llamar('guardar', payload, { espera: 150000 });
+        // Las actas llevan su idCliente: si ya habían llegado, el servidor devuelve la misma (no se duplican)
+        const r = await llamar(item.accion || 'guardar', payload, { espera: 150000 });
         await DB.borrar('cola', item.id);
         enviados++;
         if (alAvanzar) alAvanzar(r, item, null);
@@ -99,7 +125,7 @@ const Api = (() => {
 
   const descartar = id => DB.borrar('cola', id);
 
-  return { demo, ErrorApi, config, guardarConfig, configurada, llamar, encolar, pendientes, enviarCola, descartar };
+  return { demo, ErrorApi, config, guardarConfig, configurada, llamar, encolar, enviarUno, pendientes, enviarCola, descartar };
 })();
 
 /* Respuestas simuladas para probar la app sin servidor (?demo). */
@@ -136,15 +162,21 @@ const Demo = (() => {
       estado: 'Observado', controlTarjeta: '✗ Otra tarjeta ****5678', respaldoUrl: '#' })
   ];
   const buscar = id => ultimos.find(f => f.id === id);
+  // Custodia simulada de la tarjeta: empieza sin entregas; cada acta cambia de titular
+  let custodia = [], correlativoActa = 0;
+  const huellas = {}, actas = {};
+  const normal = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+  const custodiaPublica = () => custodia.map(c => ({ tarjeta: c.tarjeta, ultimos4: c.ultimos4, titular: c.titular, desde: c.desde, id: c.id, tipo: c.tipo }));
 
   async function responder(accion, datos) {
     await espera(accion === 'ocr' ? 1600 : accion === 'guardar' ? 1400 : 300);
     switch (accion) {
       case 'ping': return { ok: true, version: 'demo', cuenta: 'demo@telconsulting.cl' };
-      case 'config': return { ok: true, listas, tarjetas: { mp: '****1234', santander: '' }, planillaUrl: '#', version: 'demo' };
+      case 'config': return { ok: true, listas, tarjetas: { mp: '****1234', santander: '' }, planillaUrl: '#', version: 'demo',
+        custodia: custodiaPublica(), huellasQr: Object.assign({}, huellas) };
       case 'configurar': return { ok: true, tarjetas: { mp: '****' + (datos.tarjetaMP || '1234'), santander: '' } };
       case 'resumen': return {
-        ok: true, saldo: 154510, planillaUrl: '#', ultimos: ultimos.slice(0, 5),
+        ok: true, saldo: 154510, planillaUrl: '#', ultimos: ultimos.slice(0, 5), custodia: custodiaPublica(), huellasQr: Object.assign({}, huellas),
         mes: { mes: '2026-10', documentos: 6, desembolsos: 245300, ingresos: 400000, conTarjeta: 5, tarjetaOk: 4 }
       };
       case 'ocr': return {
@@ -178,6 +210,25 @@ const Demo = (() => {
         const liberado = Number(datos.id.slice(-4)) === correlativo;
         if (liberado) correlativo--;
         return { ok: true, id: datos.id, deshecho: true, correlativoLiberado: liberado, archivosEnPapelera: 2 };
+      }
+      case 'entregarTarjeta': {
+        if (actas[datos.idCliente]) return Object.assign({}, actas[datos.idCliente], { repetida: true });
+        const n = ++correlativoActa, id = 'TE-2026-' + String(n).padStart(4, '0'), ahora = new Date().toISOString();
+        const u4 = datos.tarjeta.ultimos4, anterior = custodia.find(c => c.ultimos4 === u4);
+        const alertas = anterior && normal(anterior.titular) !== normal(datos.entrega.nombre) ? ['La tarjeta figuraba en poder de ' + anterior.titular] : [];
+        if (!datos.lugar || datos.lugar.lat === undefined) alertas.push('Sin ubicación GPS: ' + ((datos.lugar && datos.lugar.error) || 'no disponible'));
+        const periodo = datos.tipo === 'Devolución' && anterior
+          ? { desde: anterior.desde, hasta: ahora, documentos: 2, monto: 38480, saldoInicial: anterior.saldo === undefined ? null : anterior.saldo,
+            saldoFinal: datos.saldo === undefined ? null : datos.saldo }
+          : null;
+        custodia = custodia.filter(c => c.ultimos4 !== u4).concat([{ tarjeta: '****' + u4, ultimos4: u4, titular: datos.recibe.nombre,
+          desde: ahora, id, tipo: datos.tipo, saldo: datos.saldo }]);
+        if (datos.tarjeta.qrHuella) huellas[datos.tarjeta.qrHuella] = u4;
+        const r = { ok: true, id, codigo: 'A1B2-C3D' + n, actaUrl: '#', fichaUrl: '#', fotoUrl: null, planillaUrl: '#', momentoServidor: ahora,
+          direccion: datos.lugar && datos.lugar.lat !== undefined ? 'Av. Providencia 2250, Providencia, Región Metropolitana' : '',
+          titular: { tarjeta: '****' + u4, ultimos4: u4, nombre: datos.recibe.nombre, desde: ahora, id }, alertas, periodo };
+        actas[datos.idCliente] = r;
+        return r;
       }
       case 'anular': {
         const f = buscar(datos.id);

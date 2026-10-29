@@ -1,11 +1,12 @@
 /* App Caja Chica · flujo: capturar → revisar páginas → datos del gasto → guardar en Drive y en la planilla. */
 (() => {
-  const VERSION = '1.1.0';
+  const VERSION = '1.2.0';
   const MAX_BYTES = 20 * 1048576;
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
   const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-  const TITULOS = { inicio: 'Caja Chica', paginas: 'Páginas del documento', datos: 'Datos del gasto', listo: 'Resultado', ajustes: 'Ajustes', registro: 'Registro' };
+  const TITULOS = { inicio: 'Caja Chica', paginas: 'Páginas del documento', datos: 'Datos del gasto', listo: 'Resultado', ajustes: 'Ajustes', registro: 'Registro',
+    entrega: 'Entrega de tarjeta', acta: 'Acta de la tarjeta' };
   const GASTOS = ['Desembolso MP', 'Rendición Santander'];
   const CAMPOS = { fFecha: 'fecha', fMonto: 'monto', fTipo: 'tipoDoc', fNumero: 'numero', fProveedor: 'proveedor', fRut: 'rut', fMedio: 'medio', fCeco: 'ceco', fDetalle: 'detalle' };
   const URL_SERVIDOR = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+|macros)\/s\/[\w-]+\/exec$/;
@@ -24,7 +25,10 @@
     tira: null,           // boleta larga unida: { clave, resultado, recorte, proceso }
     modoTira: 'auto',     // 'auto': quita el traslape entre fotos; 'simple': una tras otra
     modoCamara: 'documento',
-    listoActual: null
+    listoActual: null,
+    entrega: null,        // acta en curso: { tipo, qr, ubicacion, foto, fotoUrl, idCliente, enviando, descartar }
+    custodia: [],         // en poder de quién está cada tarjeta (lo informa el servidor)
+    huellasQr: {}         // huella del QR de la tarjeta → últimos 4 dígitos
   };
   let cadena = Promise.resolve();      // las fotos se procesan de a una (cuida la memoria del teléfono)
 
@@ -80,6 +84,7 @@
 
   function mostrar(vista) {
     if (vista !== 'datos' && est.edicion) salirEdicion();
+    if (vista !== 'entrega') { clearInterval(relojDeclaracion); relojDeclaracion = null; }
     est.vista = vista;
     $$('.vista').forEach(v => v.classList.toggle('activa', v.id === 'v-' + vista));
     $('#tituloVista').textContent = vista === 'datos' && est.edicion ? 'Corregir ' + est.edicion.id : TITULOS[vista];
@@ -91,6 +96,7 @@
     if (vista === 'ajustes') cargarAjustes();
     if (vista === 'registro') pintarRegistro();
     if (vista === 'paginas') pintarPaginas();
+    if (vista === 'entrega' && est.entrega) $('#tituloVista').textContent = est.entrega.tipo === 'Devolución' ? 'Devolución de tarjeta' : 'Entrega de tarjeta';
   }
 
   function ir(vista) {
@@ -123,6 +129,7 @@
 
   function cerrarCapaSinHistorial() {
     if (est.capa === 'camara') detenerCamara();
+    if (est.capa === 'qr') detenerQr();
     if (est.capa === 'editor') ocultarEditor();
     if (est.capa === 'tira') ocultarTira();
     est.capa = null;
@@ -205,8 +212,10 @@
       return;
     }
     let v = st.vista || 'inicio';
-    if (est.vista === 'listo' || v === 'listo' || (v === 'datos' && !hayDocumento() && !est.edicion)
-      || (v === 'paginas' && !est.paginas.length) || (v === 'registro' && !est.registro)) {
+    // Salir de un acta a medio llenar no pierde nada: queda como borrador y el inicio ofrece seguirla
+    if (est.vista === 'entrega' && v !== 'entrega') soltarEntrega();
+    if (est.vista === 'listo' || v === 'listo' || est.vista === 'acta' || v === 'acta' || (v === 'datos' && !hayDocumento() && !est.edicion)
+      || (v === 'paginas' && !est.paginas.length) || (v === 'registro' && !est.registro) || (v === 'entrega' && !est.entrega)) {
       if ((st.prof || 0) > 0) { volverInicio(); return; }
       v = 'inicio';
     }
@@ -219,6 +228,7 @@
     $('#avisoConfig').hidden = Api.configurada();
     pintarCola();
     revisarSesion();
+    revisarBorrador();
     const previo = leerLocal('resumen');
     if (previo) pintarResumen(previo);
     refrescarResumen(false);
@@ -245,6 +255,8 @@
     $('#kpiSaldo').textContent = clp(r.saldo || 0);
     pintarLista(r.ultimos || []);
     $('#btnVerMas').hidden = !r.ultimos || r.ultimos.length < 5;
+    if (r.custodia) pintarCustodia(r.custodia);
+    if (r.huellasQr) guardarHuellas(r.huellasQr);
     const planilla = enlaceSeguro(r.planillaUrl);
     $('#lnkPlanilla').hidden = planilla === '#';
     if (planilla !== '#') $('#lnkPlanilla').href = planilla;
@@ -294,10 +306,14 @@
     const bloqueados = items.filter(i => (i.intentos || 0) >= 3);
     $('#avisoCola').hidden = !items.length;
     $('#btnDescartarCola').hidden = !bloqueados.length;
+    // Un acta guardada en el teléfono ya cambia de manos la tarjeta en el inicio ("pendiente de envío")
+    pintarCustodia(est.custodia, items.filter(i => i.accion === 'entregarTarjeta').map(i => i.payload));
     if (!items.length) return;
+    const actas = items.filter(i => i.accion === 'entregarTarjeta').length, docs = items.length - actas;
+    const que = [actas ? plural(actas, 'acta', 'actas') : '', docs ? plural(docs, 'documento', 'documentos') : ''].filter(Boolean).join(' y ');
     $('#textoCola').textContent = bloqueados.length
-      ? `${bloqueados.length === 1 ? '1 documento no se pudo enviar' : bloqueados.length + ' documentos no se pudieron enviar'}: ${bloqueados[0].ultimoError || 'error del servidor'}`
-      : (items.length === 1 ? '1 documento esperando conexión' : `${items.length} documentos esperando conexión`);
+      ? `${bloqueados.length === 1 ? '1 envío no se pudo hacer' : bloqueados.length + ' envíos no se pudieron hacer'}: ${bloqueados[0].ultimoError || 'error del servidor'}`
+      : `${que} esperando conexión`;
   }
 
   /** Botón "Enviar" del aviso de la cola: si hay documentos que parecen repetidos, pregunta antes de guardarlos. */
@@ -317,7 +333,7 @@
       return;
     }
     const n = await Api.enviarCola((r, item, e) => {
-      if (r) toast(`${r.id} enviado a Drive`);
+      if (r) toast(`${r.id} ${item.accion === 'entregarTarjeta' ? 'registrada' : 'enviado a Drive'}`);
       else if (e && e.datos && e.datos.duplicado) toast(`Ya estaba registrado como ${e.datos.duplicado.id}`);
     }, incluirBloqueados, guardarRepetidos);
     await pintarCola();
@@ -327,8 +343,9 @@
   async function descartarBloqueados() {
     const bloqueados = (await Api.pendientes()).filter(i => (i.intentos || 0) >= 3);
     if (!bloqueados.length) return;
-    const d = bloqueados[0].payload && bloqueados[0].payload.datos;
-    const detalle = d ? `${d.proveedor || d.detalle || 'documento'} · ${clp(d.monto)}` : 'documento';
+    const p = bloqueados[0].payload || {}, d = p.datos;
+    const detalle = d ? `${d.proveedor || d.detalle || 'documento'} · ${clp(d.monto)}`
+      : p.tarjeta ? `acta de ${p.tipo === 'Devolución' ? 'devolución' : 'entrega'} de la tarjeta ****${p.tarjeta.ultimos4}` : 'documento';
     const si = await preguntar('Descartar sin enviar', `Se borrará del teléfono sin llegar a Drive: ${detalle}${bloqueados.length > 1 ? ` y ${bloqueados.length - 1} más` : ''}. ¿Seguro?`, 'Descartar', 'Cancelar');
     if (!si) return;
     for (const b of bloqueados) await Api.descartar(b.id);
@@ -1491,6 +1508,542 @@
     }
   }
 
+  // ---------- Entrega y devolución de la tarjeta: acta con momento, lugar y firma de ambos ----------
+
+  const IDS_ENTREGA = ['eUltimos4', 'eEntregaNombre', 'eEntregaRut', 'eEntregaCargo', 'eRecibeNombre', 'eRecibeRut', 'eRecibeCargo',
+    'eRecibeCorreo', 'eLugar', 'eSaldo', 'eDevolucionPrevista', 'eMotivo'];
+  // Campos que aparecen en la declaración: si cambian después de firmar, hay que volver a firmar
+  const IDS_DECLARACION = ['eUltimos4', 'eEntregaNombre', 'eEntregaRut', 'eRecibeNombre', 'eRecibeRut', 'eLugar', 'eSaldo', 'eDevolucionPrevista', 'eMotivo'];
+  const valor = id => document.getElementById(id).value.trim();
+  const normalNombre = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+  const mismoNombre = (a, b) => !!normalNombre(a) && normalNombre(a) === normalNombre(b);
+  const dos = n => String(n).padStart(2, '0');
+  // Guion y espacio que no se cortan al final de la línea ("29-10 14:54" queda junto)
+  const fechaHoraCorta = iso => { const d = new Date(iso); return isNaN(d) ? '' : `${dos(d.getDate())}‑${dos(d.getMonth() + 1)} ${dos(d.getHours())}:${dos(d.getMinutes())}`; };
+  const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`;
+  let firmas = null, relojDeclaracion = null, flujoQr = null, abriendoQr = false, relojBorrador = null;
+
+  function guardarHuellas(h) {
+    est.huellasQr = h && typeof h === 'object' ? h : {};
+    guardarLocal('huellasQr', est.huellasQr);
+  }
+
+  /** La tarjeta MP de la empresa (la configurada en Ajustes) y quién la tiene ahora. */
+  function custodiaActual() {
+    const mp = String((est.tarjetas && est.tarjetas.mp) || '').replace(/\D/g, '');
+    return est.custodia.find(c => c.ultimos4 === mp) || est.custodia[0] || null;
+  }
+
+  /** Quién tiene la tarjeta según el servidor; un acta guardada en el teléfono y aún sin enviar manda (queda "pendiente de envío"). */
+  function pintarCustodia(lista, pendientes) {
+    est.custodia = Array.isArray(lista) ? lista : [];
+    guardarLocal('custodia', est.custodia);
+    if (pendientes) est.actasPendientes = pendientes;
+    const c = custodiaActual(), mp = String((est.tarjetas && est.tarjetas.mp) || '').replace(/\D/g, '');
+    const u4 = (c && c.ultimos4) || mp;
+    const pendiente = (est.actasPendientes || []).filter(p => p.tarjeta && p.tarjeta.ultimos4 === u4)
+      .sort((a, b) => String(a.momento).localeCompare(String(b.momento))).pop();
+    $('#custodiaTarjeta').textContent = u4 ? `Tarjeta MP ****${u4}` : 'Tarjeta Mercado Pago';
+    $('#custodiaTitular').textContent = pendiente ? `En poder de ${pendiente.recibe.nombre} (acta pendiente de envío)`
+      : c ? `En poder de ${c.titular} desde ${fechaHoraCorta(c.desde)}` : 'Sin entregas registradas';
+    $('#btnEntrega').textContent = tipoSugerido() === 'Devolución' ? 'Recibir' : 'Entregar';
+  }
+
+  /** Si la tarjeta la tiene otra persona, lo natural es recibirla (devolución); si no, entregarla. */
+  function titularActual() {
+    const c = custodiaActual(), u4 = c ? c.ultimos4 : '';
+    const pendiente = (est.actasPendientes || []).filter(p => p.tarjeta && (!u4 || p.tarjeta.ultimos4 === u4))
+      .sort((a, b) => String(a.momento).localeCompare(String(b.momento))).pop();
+    return pendiente ? pendiente.recibe.nombre : c ? c.titular : '';
+  }
+
+  function tipoSugerido() {
+    const t = titularActual();
+    return t && !mismoNombre(t, Api.config().nombre) ? 'Devolución' : 'Entrega';
+  }
+
+  function prepararFirmas() {
+    if (!firmas) {
+      const alCambiar = f => {
+        const caja = f.canvas.closest('.firma');
+        caja.classList.toggle('firmada', f.valida());
+        caja.classList.remove('invalido');
+        if (est.entrega && f.trazos.length) tocarEntrega();
+      };
+      firmas = { entrega: new Custodia.Firma($('#firmaEntrega'), alCambiar), recibe: new Custodia.Firma($('#firmaRecibe'), alCambiar) };
+    }
+    firmas.entrega.preparar();
+    firmas.recibe.preparar();
+  }
+
+  // ---- Borrador del acta: se guarda en el teléfono mientras se llena (si Android cierra la app, nada se pierde) ----
+
+  async function leerBorrador() {
+    try { return await DB.leer('sesion', 'acta'); } catch (e) { return null; }
+  }
+
+  function borrarBorrador() {
+    clearTimeout(relojBorrador);
+    DB.borrar('sesion', 'acta').catch(() => {});
+    $('#avisoActa').hidden = true;
+  }
+
+  async function guardarBorrador() {
+    clearTimeout(relojBorrador);
+    const e = est.entrega;
+    if (!e || !e.tocado || e.enviando) return;
+    const campos = {};
+    IDS_ENTREGA.forEach(id => { campos[id] = document.getElementById(id).value; });
+    const datos = {
+      tipo: e.tipo, idCliente: e.idCliente, qr: e.qr, ubicacion: e.ubicacion, foto: e.foto || null, campos,
+      conforme: $('#eConforme').checked, momentoLeido: e.momentoLeido || null,
+      firmas: firmas ? { entrega: firmas.entrega.datos(), recibe: firmas.recibe.datos() } : null, guardado: new Date().toISOString()
+    };
+    try { await DB.guardar('sesion', 'acta', datos); } catch (err) { /* sin espacio: el acta sigue en pantalla */ }
+  }
+
+  /** Marca el acta como empezada (desde aquí se guarda como borrador). */
+  function tocarEntrega() {
+    const e = est.entrega;
+    if (!e) return;
+    e.tocado = true;
+    clearTimeout(relojBorrador);
+    relojBorrador = setTimeout(guardarBorrador, 500);
+  }
+
+  async function revisarBorrador() {
+    const b = await leerBorrador();
+    $('#avisoActa').hidden = !b || est.vista !== 'inicio';
+    if (b) $('#textoActa').textContent = `Tienes un acta de ${b.tipo === 'Devolución' ? 'devolución' : 'entrega'} sin terminar.`;
+  }
+
+  /** Botón Entregar/Recibir: si hay un acta a medio llenar, se ofrece seguirla. */
+  async function pedirEntrega() {
+    if (est.vista !== 'inicio' || Date.now() < (est.bloqueoToques || 0)) return;
+    const b = await leerBorrador();
+    if (b) {
+      const seguir = await preguntar('Acta sin terminar', `Tienes un acta de ${b.tipo === 'Devolución' ? 'devolución' : 'entrega'} a medio llenar. ¿Quieres seguirla?`, 'Seguir esa', 'Empezar otra');
+      if (seguir) { abrirEntrega(b.tipo, b); return; }
+      borrarBorrador();
+    }
+    abrirEntrega(tipoSugerido());
+  }
+
+  function abrirEntrega(tipo, borrador) {
+    if (est.vista !== 'inicio') return;
+    soltarEntrega();
+    $('#avisoActa').hidden = true;
+    const b = borrador || null;
+    est.entrega = { tipo, qr: b ? b.qr : null, ubicacion: b ? b.ubicacion : null, foto: null, fotoUrl: null, fotoProceso: null,
+      idCliente: b ? b.idCliente : nuevoIdCliente(), enviando: false, tocado: !!b, momentoLeido: b ? b.momentoLeido : null };
+    IDS_ENTREGA.forEach(id => { document.getElementById(id).value = b && b.campos ? b.campos[id] || '' : ''; });
+    $$('#v-entrega .invalido').forEach(el => el.classList.remove('invalido'));
+    $('#eEntregaRutEstado').textContent = $('#eRecibeRutEstado').textContent = '';
+    $('#eConforme').checked = !!(b && b.conforme);
+    $('#eFotoMini').hidden = true;
+    $('#eFotoTexto').textContent = 'Foto del momento (opcional)';
+    if (b && b.foto) mostrarFotoEntrega(b.foto);
+    if (!b) {
+      const yo = Api.config(), c = custodiaActual(), mp = String((est.tarjetas && est.tarjetas.mp) || '').replace(/\D/g, '');
+      $('#eUltimos4').value = (c && c.ultimos4) || mp || '';
+      const persona = (pre, p) => { $(`#e${pre}Nombre`).value = p.nombre || ''; $(`#e${pre}Rut`).value = p.rut || ''; $(`#e${pre}Cargo`).value = p.cargo || ''; };
+      if (tipo === 'Devolución') { persona('Entrega', { nombre: titularActual() }); persona('Recibe', yo); }
+      else persona('Entrega', yo);
+    }
+    pintarQrEstado(b && b.qr ? 'QR leído ✓' : 'Sin escanear', b && b.qr ? 'ok' : '');
+    pintarTipoEntrega();
+    ir('entrega');
+    requestAnimationFrame(() => {
+      prepararFirmas();
+      if (b && b.firmas) { firmas.entrega.cargar(b.firmas.entrega); firmas.recibe.cargar(b.firmas.recibe); }
+      else { firmas.entrega.borrar(); firmas.recibe.borrar(); }
+      pintarDeclaracion();
+    });
+    relojDeclaracion = setInterval(pintarDeclaracion, 5000);    // la hora visible avanza con el reloj hasta que ambos confirman
+    pintarUbicacion();
+    if (!b || !b.ubicacion || b.ubicacion.error) buscarUbicacion();
+  }
+
+  /** Al salir de la pantalla del acta: si se había empezado, queda guardada como borrador (el inicio la ofrece). */
+  function soltarEntrega() {
+    const e = est.entrega;
+    if (e && e.tocado && !e.enviando) guardarBorrador();
+    if (e && e.fotoUrl) URL.revokeObjectURL(e.fotoUrl);
+    est.entrega = null;
+  }
+
+  function nuevoIdCliente() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  }
+
+  function pintarTipoEntrega() {
+    const e = est.entrega, devolucion = e.tipo === 'Devolución';
+    $$('#segEntrega button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.valor === e.tipo)));
+    $('#tituloEntrega').textContent = devolucion ? 'Entrega (quien devuelve)' : 'Entrega';
+    $('#tituloRecibe').textContent = 'Recibe';
+    $('#campoUso').hidden = devolucion;
+    $('#campoDevolucion').hidden = devolucion;
+    $('#btnRegistrarEntrega').textContent = devolucion ? 'Registrar devolución' : 'Registrar entrega';
+    if (est.vista === 'entrega') $('#tituloVista').textContent = devolucion ? 'Devolución de tarjeta' : 'Entrega de tarjeta';
+    pintarDeclaracion();
+  }
+
+  /** Las firmas valen para el texto que se leyó: si cambia algo de la declaración, se borran y se desmarca la conformidad. */
+  function invalidarFirmas(aviso) {
+    const firmado = firmas && (firmas.entrega.trazos.length || firmas.recibe.trazos.length);
+    const confirmado = $('#eConforme').checked;
+    if (!firmado && !confirmado) return;
+    if (firmas) { firmas.entrega.borrar(); firmas.recibe.borrar(); }
+    $('#eConforme').checked = false;
+    if (est.entrega) est.entrega.momentoLeido = null;
+    toast(aviso || 'Cambió el acta: firmen y confirmen de nuevo');
+  }
+
+  /** Cambiar entre entrega y devolución intercambia a las personas (el correo era de quien recibía: se limpia). */
+  function cambiarTipoEntrega(tipo) {
+    const e = est.entrega;
+    if (!e || e.tipo === tipo) return;
+    e.tipo = tipo;
+    ['Nombre', 'Rut', 'Cargo'].forEach(k => {
+      const a = $(`#eEntrega${k}`), b = $(`#eRecibe${k}`), t = a.value;
+      a.value = b.value;
+      b.value = t;
+    });
+    $('#eRecibeCorreo').value = '';
+    ['eEntregaRut', 'eRecibeRut'].forEach(pintarEstadoRut);
+    invalidarFirmas('Se borraron las firmas: firmen de nuevo');
+    pintarTipoEntrega();
+    tocarEntrega();
+  }
+
+  function pintarEstadoRut(id) {
+    const el = document.getElementById(id), s = document.getElementById(id + 'Estado'), r = rutInfo(el.value);
+    if (!el.value.trim()) { s.textContent = ''; s.className = ''; return; }
+    if (r) el.value = r.texto;
+    s.textContent = r && r.ok ? 'RUT válido' : 'RUT no válido';
+    s.className = r && r.ok ? 'ok' : 'alerta';
+  }
+
+  function pintarQrEstado(texto, clase) {
+    const el = $('#eQrEstado');
+    el.textContent = texto;
+    el.className = 'qr-estado' + (clase ? ' ' + clase : '');
+  }
+
+  function textoDeclaracion(momento) {
+    const e = est.entrega, d = momento || new Date();
+    const u4 = soloDigitos(valor('eUltimos4')).slice(0, 4), textoSaldo = valor('eSaldo');
+    const fecha = `${d.getDate()} de ${MESES[d.getMonth()]} de ${d.getFullYear()}`, hora = `${dos(d.getHours())}:${dos(d.getMinutes())}`;
+    const quien = (n, r) => `${n || '________'}${r ? `, RUT ${r}` : ''}`;
+    const tarjeta = `la tarjeta Mercado Pago terminada en ${u4 || '____'}${textoSaldo !== '' ? `, con un saldo de ${clp(Number(soloDigitos(textoSaldo)))}` : ''}`;
+    const base = `Yo, ${quien(valor('eRecibeNombre'), valor('eRecibeRut'))}, recibo de ${quien(valor('eEntregaNombre'), valor('eEntregaRut'))}, `
+      + `${tarjeta}, en ${valor('eLugar') || '________'}, el ${fecha} a las ${hora}. `;
+    const datos = 'Ambos autorizamos el registro de estos datos (incluidos lugar, firmas y foto) para el control de la tarjeta.';
+    if (e && e.tipo === 'Devolución') {
+      return base + 'Quien devuelve declara haber rendido en la App Caja Chica los gastos hechos con ella, o entregar ahora sus respaldos. ' + datos;
+    }
+    const uso = valor('eMotivo'), plazo = valor('eDevolucionPrevista');
+    return base + `Me comprometo a usarla solo en gastos de Servicios de Telecomunicaciones SpA${uso ? ` (${uso})` : ''}, `
+      + `a rendir cada gasto con su respaldo en la App Caja Chica y a devolverla cuando se me solicite${plazo ? ` o a más tardar el ${fechaCorta(plazo)}` : ''}. `
+      + 'Quien entrega declara que la tarjeta está en buen estado. ' + datos;
+  }
+
+  /** La hora de la declaración avanza con el reloj hasta que ambos confirman; desde ahí queda fija y es la que se registra. */
+  function pintarDeclaracion() {
+    const e = est.entrega;
+    if (!e || est.vista !== 'entrega') return;
+    const texto = textoDeclaracion(e.momentoLeido ? new Date(e.momentoLeido) : new Date());
+    if ($('#eDeclaracion').textContent !== texto) $('#eDeclaracion').textContent = texto;
+  }
+
+  async function buscarUbicacion() {
+    const e = est.entrega;
+    if (!e) return;
+    e.buscandoUbicacion = true;
+    pintarUbicacion();
+    // Cada lectura mejor se usa al tiro (bajo techo el GPS puede no bajar de ±60 m); "Reintentar" no borra la anterior
+    const r = await Custodia.ubicar(12000, mejor => {
+      if (est.entrega !== e) return;
+      e.ubicacion = mejor;
+      pintarUbicacion();
+    });
+    if (est.entrega !== e) return;
+    e.buscandoUbicacion = false;
+    if (!r.error || !e.ubicacion || e.ubicacion.error) e.ubicacion = r.error && e.ubicacion && !e.ubicacion.error ? e.ubicacion : r;
+    pintarUbicacion();
+    if (e.tocado) guardarBorrador();
+  }
+
+  function pintarUbicacion() {
+    const e = est.entrega, u = e && e.ubicacion, el = $('#eUbicacion'), t = $('#eUbicacionTexto');
+    if (!u || (u.error && e.buscandoUbicacion)) {
+      el.className = 'control info';
+      t.textContent = 'Buscando la ubicación…';
+    } else if (u.error) {
+      el.className = 'control alerta';
+      t.textContent = `${u.error}: escribe el lugar con detalle`;
+    } else {
+      el.className = 'control ' + (u.precision > 200 ? 'revisar' : 'ok');
+      t.innerHTML = `Ubicación registrada (±${Number(u.precision)} m)${e.buscandoUbicacion ? ', mejorando…' : ''} · `
+        + `<a href="https://maps.google.com/?q=${Number(u.lat)},${Number(u.lon)}" target="_blank" rel="noopener">ver mapa</a>`;
+    }
+    $('#btnReubicar').hidden = !u || !!(e && e.buscandoUbicacion);
+  }
+
+  // Lector del QR de la tarjeta (cámara dentro de la app)
+  async function abrirLectorQr() {
+    if (abriendoQr || flujoQr || !est.entrega || est.capa) return;
+    abriendoQr = true;                     // un doble toque no abre dos cámaras
+    try {
+      if (!(await Custodia.lectorDisponible())) {
+        toast('Este teléfono no lee códigos QR desde la app: escribe los 4 últimos dígitos', 6000);
+        $('#eUltimos4').focus();
+        return;
+      }
+      try {
+        flujoQr = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+      } catch (e) {
+        flujoQr = null;
+        toast(e.name === 'NotAllowedError' ? 'Sin permiso de cámara: escribe los 4 últimos dígitos' : 'No se pudo abrir la cámara: escribe los 4 últimos dígitos');
+        return;
+      }
+      if (!est.entrega || est.vista !== 'entrega') { detenerQr(); return; }
+      const video = $('#videoQr');
+      video.srcObject = flujoQr;
+      try { await video.play(); } catch (e) { /* se reintenta solo */ }
+      $('#capaQr').hidden = false;
+      abrirCapa('qr');
+    } finally {
+      abriendoQr = false;
+    }
+    let leido = null;
+    try { leido = await Custodia.leerQr($('#videoQr'), () => est.capa !== 'qr'); } catch (e) { toast('No se pudo leer el QR: escribe los 4 últimos dígitos'); }
+    if (est.capa === 'qr') cerrarCapa();
+    if (leido && est.entrega) await usarQr(leido);
+  }
+
+  function detenerQr() {
+    if (flujoQr) flujoQr.getTracks().forEach(t => t.stop());
+    flujoQr = null;
+    $('#videoQr').srcObject = null;
+    $('#capaQr').hidden = true;
+    est.bloqueoToques = Date.now() + 450;      // el segundo toque de un doble toque no cae en "Volver"
+  }
+
+  /**
+   * Del QR nunca sale su texto. Si trae el número de la tarjeta, solo se usan sus 4 últimos dígitos (sin huella: un número
+   * de tarjeta se podría reconstruir desde su huella). Si es otra cosa, su huella SHA-256 identifica la tarjeta física.
+   */
+  async function usarQr(texto) {
+    const e = est.entrega, a = Custodia.analizarQr(texto);
+    const h = a.tipo === 'numero' ? '' : await Custodia.huella(texto);
+    if (est.entrega !== e) return;
+    const anterior = soloDigitos(valor('eUltimos4'));
+    e.qr = a.tipo === 'numero' ? { tipo: 'numero' } : { huella: h, tipo: a.tipo };
+    const conocida = h ? est.huellasQr[h] || '' : '', u4 = a.ultimos4 || conocida;
+    if (u4) $('#eUltimos4').value = u4;
+    if (navigator.vibrate) navigator.vibrate(30);
+    if (conocida) pintarQrEstado(`Tarjeta ****${conocida} reconocida ✓`, 'ok');
+    else if (a.ultimos4) pintarQrEstado(`Tarjeta ****${a.ultimos4} leída ✓`, 'ok');
+    else pintarQrEstado('QR leído ✓ Confirma los 4 dígitos: quedará asociado a esta tarjeta', 'alerta');
+    if (u4 && u4 !== anterior) invalidarFirmas();
+    tocarEntrega();
+    pintarDeclaracion();
+  }
+
+  function mostrarFotoEntrega(blob) {
+    const e = est.entrega;
+    if (e.fotoUrl) URL.revokeObjectURL(e.fotoUrl);
+    e.foto = blob;
+    e.fotoUrl = URL.createObjectURL(blob);
+    $('#eFotoMini').src = e.fotoUrl;
+    $('#eFotoMini').hidden = false;
+    $('#eFotoTexto').textContent = 'Cambiar la foto';
+  }
+
+  /** La foto se achica a ~2,5 MP. Mientras se procesa, Registrar la espera (no se envía el acta sin ella). */
+  function usarFotoEntrega(archivo) {
+    const e = est.entrega;
+    if (!e || !archivo) return;
+    $('#eFotoTexto').textContent = 'Procesando la foto…';
+    e.fotoProceso = (async () => {
+      try {
+        const c = await Escaner.cargar(archivo), k = Math.min(1, Math.sqrt(2.5e6 / (c.width * c.height)));
+        const blob = await Escaner.aJpeg(k < 1 ? Escaner.escalar(c, Math.round(c.width * k)) : c, 0.85);
+        if (est.entrega !== e) return;
+        mostrarFotoEntrega(blob);
+        tocarEntrega();
+      } catch (err) {
+        if (est.entrega === e) $('#eFotoTexto').textContent = e.foto ? 'Cambiar la foto' : 'Foto del momento (opcional)';
+        toast('No se pudo usar la foto: ' + (err.message || 'formato no soportado'));
+      } finally {
+        if (est.entrega === e) e.fotoProceso = null;
+      }
+    })();
+  }
+
+  function validarEntrega() {
+    $$('#v-entrega .invalido').forEach(el => el.classList.remove('invalido'));
+    const e = est.entrega;
+    const falla = (sel, mensaje) => {
+      const el = $(sel);
+      el.classList.add('invalido');
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      return mensaje;
+    };
+    const u4 = soloDigitos(valor('eUltimos4'));
+    if (u4.length !== 4) return falla('#eUltimos4', 'Faltan los últimos 4 dígitos de la tarjeta');
+    const conocida = e.qr && e.qr.huella && est.huellasQr[e.qr.huella];
+    if (conocida && conocida !== u4) return falla('#eUltimos4', `El QR escaneado es de la tarjeta ****${conocida}: revisa los dígitos o vuelve a escanear`);
+    if (!valor('eEntregaNombre')) return falla('#eEntregaNombre', 'Falta el nombre de quien entrega');
+    const rutEntrega = valor('eEntregaRut');
+    if (rutEntrega && !(rutInfo(rutEntrega) || {}).ok) return falla('#eEntregaRut', 'Revisa el RUT de quien entrega (o déjalo vacío)');
+    if (!valor('eRecibeNombre')) return falla('#eRecibeNombre', 'Falta el nombre de quien recibe');
+    const r = rutInfo(valor('eRecibeRut'));
+    if (!r || !r.ok) return falla('#eRecibeRut', e.tipo === 'Devolución' && !valor('eRecibeRut')
+      ? 'Falta tu RUT (puedes dejarlo guardado en Ajustes)' : 'Falta el RUT de quien recibe, o no es válido');
+    if (r.texto === '78.083.138-3') return falla('#eRecibeRut', 'Ese es el RUT de la empresa: va el de la persona');
+    if (mismoNombre(valor('eEntregaNombre'), valor('eRecibeNombre'))) return falla('#eRecibeNombre', 'Quien entrega y quien recibe deben ser personas distintas');
+    const correo = valor('eRecibeCorreo');
+    if (correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correo)) return falla('#eRecibeCorreo', 'Revisa el correo (o déjalo vacío)');
+    if (!valor('eLugar')) return falla('#eLugar', 'Escribe el lugar de la entrega');
+    if (e.tipo === 'Entrega') {
+      if (!valor('eMotivo')) return falla('#eMotivo', 'Escribe el uso autorizado de la tarjeta');
+      const plazo = valor('eDevolucionPrevista');
+      if (plazo && plazo < hoyISO()) return falla('#eDevolucionPrevista', 'La devolución prevista no puede ser una fecha pasada');
+    }
+    if (!firmas.entrega.valida()) { $('#firmaEntrega').closest('.firma').classList.add('invalido'); return falla('#firmaEntrega', 'Falta la firma de quien entrega'); }
+    if (!firmas.recibe.valida()) { $('#firmaRecibe').closest('.firma').classList.add('invalido'); return falla('#firmaRecibe', 'Falta la firma de quien recibe'); }
+    if (!$('#eConforme').checked) return falla('#eConforme', 'Confirmen que ambos leyeron la declaración');
+    return null;
+  }
+
+  /**
+   * Registrar: el acta se guarda PRIMERO en el teléfono (cola) y recién después se envía. Si Android cierra la app o no
+   * hay señal, queda en la cola y se envía sola (el idCliente evita duplicados). Se espera hasta 45 s: el servidor tarda
+   * unos 15 s en armar el acta.
+   */
+  async function registrarEntrega() {
+    const e = est.entrega;
+    if (!e || e.enviando || est.guardando) return;
+    ['eEntregaRut', 'eRecibeRut'].forEach(id => { const r = rutInfo(valor(id)); if (r) document.getElementById(id).value = r.texto; });
+    const boton = $('#btnRegistrarEntrega'), textoBoton = boton.textContent;
+    if (e.fotoProceso) {
+      boton.disabled = true;
+      boton.textContent = 'Procesando la foto…';
+      await e.fotoProceso;
+      boton.disabled = false;
+      boton.textContent = textoBoton;
+      if (est.entrega !== e) return;
+    }
+    const error = validarEntrega();
+    if (error) { toast(error); return; }
+    e.enviando = true;
+    est.guardando = true;
+    boton.disabled = true;
+    boton.textContent = 'Registrando…';
+    let enviada = false;
+    try {
+      // Ubicación vieja (más de 5 min) o sin GPS: se intenta una lectura nueva corta antes de registrar
+      const u = e.ubicacion, vieja = !u || u.error || (Date.now() - new Date(u.ubicadoEn).getTime() > 5 * 60000);
+      if (vieja) {
+        const nueva = await Custodia.ubicar(6000);
+        if (!nueva.error || !u || u.error) e.ubicacion = nueva.error && u && !u.error ? u : nueva;
+      }
+      const momento = e.momentoLeido ? new Date(e.momentoLeido) : new Date(), textoSaldo = valor('eSaldo');
+      const payload = {
+        idCliente: e.idCliente,
+        tipo: e.tipo,
+        tarjeta: Object.assign({ ultimos4: soloDigitos(valor('eUltimos4')) },
+          e.qr ? (e.qr.huella ? { qrHuella: e.qr.huella, qrTipo: e.qr.tipo } : { qrTipo: e.qr.tipo }) : {}),
+        entrega: { nombre: valor('eEntregaNombre'), rut: valor('eEntregaRut'), cargo: valor('eEntregaCargo') },
+        recibe: { nombre: valor('eRecibeNombre'), rut: valor('eRecibeRut'), cargo: valor('eRecibeCargo'), correo: valor('eRecibeCorreo') },
+        lugar: Object.assign({ texto: valor('eLugar') }, e.ubicacion || { error: 'Ubicación no disponible' }),
+        momento: momento.toISOString(),
+        declaracion: textoDeclaracion(momento),
+        firmas: { entrega: firmas.entrega.aPng(), recibe: firmas.recibe.aPng() },
+        meta: { versionApp: VERSION, dispositivo: navigator.userAgent, origen: 'app' }
+      };
+      if (textoSaldo !== '') payload.saldo = Number(soloDigitos(textoSaldo));
+      if (e.tipo === 'Entrega') {
+        payload.motivo = valor('eMotivo');
+        if (valor('eDevolucionPrevista')) payload.devolucionPrevista = valor('eDevolucionPrevista');
+      }
+      if (e.foto) payload.foto = await aBase64(e.foto);
+      const idCola = await Api.encolar(payload, 'entregarTarjeta');
+      borrarBorrador();                          // desde aquí el acta vive en la cola del teléfono
+      e.tocado = false;
+      enviada = true;
+      let r = null, enCola = null;
+      try {
+        if (!Api.configurada()) throw new Api.ErrorApi('La app aún no está vinculada', 'config');
+        r = await Api.enviarUno(idCola, 45000);
+      } catch (err) {
+        if (err.codigo === 'red' || err.codigo === 'config' || err.codigo === 'clave') enCola = err.codigo;
+        else {
+          // El servidor la rechazó: vuelve a la pantalla para corregir (no queda en la cola)
+          enviada = false;
+          e.tocado = true;
+          guardarBorrador();
+          toast('No se pudo registrar: ' + err.message, 7000);
+          return;
+        }
+      }
+      est.guardando = false;
+      soltarEntrega();
+      mostrarActa(r, payload, enCola);
+      if (r) refrescarResumen(false);
+    } finally {
+      est.guardando = false;
+      if (!enviada) e.enviando = false;
+      boton.disabled = false;
+      boton.textContent = textoBoton;
+    }
+  }
+
+  function mostrarActa(r, p, enCola) {
+    const devolucion = p.tipo === 'Devolución', icono = $('#actaIcono');
+    icono.classList.toggle('cola', !!enCola);
+    icono.innerHTML = `<svg class="ico"><use href="#${enCola ? 'i-nube' : 'i-check'}"/></svg>`;
+    $('#actaTitulo').textContent = enCola ? 'Acta guardada en el teléfono' : devolucion ? 'Devolución registrada' : 'Entrega registrada';
+    $('#actaId').textContent = r ? `${r.id} · código ${r.codigo}${r.repetida ? ' · ya estaba registrada' : ''}` : '';
+    // Quién la tiene: lo dice el servidor (un acta que llegó tarde puede no cambiar al titular)
+    const titular = r && r.titular ? r.titular.nombre : p.recibe.nombre, u4 = r && r.titular ? r.titular.ultimos4 : p.tarjeta.ultimos4;
+    $('#actaDetalle').textContent = enCola === 'config' ? 'Se enviará cuando vincules la app en Ajustes.'
+      : enCola === 'clave' ? 'Se enviará cuando la clave de acceso esté al día (revisa Ajustes).'
+        : enCola ? 'Se enviará sola apenas haya conexión, con la hora y el lugar de este momento.'
+          : `La tarjeta ****${u4} queda en poder de ${titular}.`;
+    const controles = $('#actaControles');
+    controles.innerHTML = '';
+    const agregar = (clase, ico, texto) => controles.insertAdjacentHTML('beforeend',
+      `<div class="control ${clase}"><svg class="ico"><use href="#${ico}"/></svg><span>${esc(texto)}</span></div>`);
+    if (r && r.advertencia) agregar('alerta', 'i-alerta', r.advertencia);
+    if (r && r.esVigente === false) agregar('revisar', 'i-alerta', `Esta acta es anterior a la vigente: la tarjeta la tiene ${titular}`);
+    if (r && r.direccion) agregar('info', 'i-ubicacion', r.direccion);
+    if (r && r.periodo) {
+      const pe = r.periodo, n = Number(pe.documentos) || 0, lim = pe.limite || {};
+      const saldos = pe.saldoInicial !== null && pe.saldoInicial !== undefined && pe.saldoFinal !== null && pe.saldoFinal !== undefined
+        ? ` · saldo al recibirla ${clp(pe.saldoInicial)}, al devolverla ${clp(pe.saldoFinal)}` : '';
+      const limite = lim.documentos ? `, más ${plural(lim.documentos, 'gasto', 'gastos')} del día del traspaso por ${clp(lim.monto)}` : '';
+      agregar('info', 'i-tarjeta', `Durante la custodia (${fechaHoraCorta(pe.desde)} → ${fechaHoraCorta(pe.hasta)}) `
+        + `${n === 1 ? 'se registró 1 gasto' : `se registraron ${n} gastos`} con la tarjeta por ${clp(pe.monto)}${limite}${saldos}`);
+    }
+    ((r && r.alertas) || []).forEach(a => agregar('revisar', 'i-alerta', a));
+    $('#lnkActa').href = enlaceSeguro(r && r.actaUrl);
+    $('#lnkActaPlanilla').href = enlaceSeguro(r && r.planillaUrl);
+    $('#actaEnlaces').hidden = !r;
+    history.replaceState({ vista: 'acta', prof: profundidad() }, '');
+    mostrar('acta');
+    pintarCola();
+    // El inicio muestra al titular al tiro (sin esperar al resumen del servidor)
+    if (r && r.titular) {
+      const otras = est.custodia.filter(c => c.ultimos4 !== r.titular.ultimos4);
+      pintarCustodia(otras.concat([{ tarjeta: r.titular.tarjeta, ultimos4: r.titular.ultimos4, titular: r.titular.nombre, desde: r.titular.desde,
+        id: r.titular.id, tipo: p.tipo }]));
+    }
+  }
+
   // ---------- Ajustes y vinculación ----------
 
   function cargarAjustes() {
@@ -1498,6 +2051,8 @@
     $('#aUrl').value = c.url || '';
     $('#aToken').value = c.token || '';
     $('#aNombre').value = c.nombre || '';
+    $('#aRut').value = c.rut || '';
+    $('#aCargo').value = c.cargo || '';
     $('#aTarjetaMP').value = '';
     $('#aTarjetaSan').value = '';
     $('#aTarjetaMP').placeholder = (est.tarjetas && est.tarjetas.mp) || 'Últimos 4';
@@ -1517,7 +2072,9 @@
     if (!conexion) return;
     const mp = soloDigitos($('#aTarjetaMP').value), san = soloDigitos($('#aTarjetaSan').value);
     if ((mp && mp.length !== 4) || (san && san.length !== 4)) { toast('Ingresa solo los últimos 4 dígitos de cada tarjeta'); return; }
-    Api.guardarConfig(Object.assign(conexion, { nombre: $('#aNombre').value.trim() }));
+    const rut = $('#aRut').value.trim(), infoRut = rut ? rutInfo(rut) : null;
+    if (rut && !(infoRut && infoRut.ok)) { toast('Revisa tu RUT (o déjalo vacío)'); return; }
+    Api.guardarConfig(Object.assign(conexion, { nombre: $('#aNombre').value.trim(), rut: infoRut ? infoRut.texto : '', cargo: $('#aCargo').value.trim() }));
     if (mp || san) {
       try {
         const r = await Api.llamar('configurar', Object.assign({}, mp ? { tarjetaMP: mp } : {}, san ? { tarjetaSantander: san } : {}));
@@ -1558,6 +2115,8 @@
       est.tarjetas = r.tarjetas || {};
       guardarLocal('listas', r.listas);
       guardarLocal('tarjetas', est.tarjetas);
+      if (r.custodia) pintarCustodia(r.custodia);
+      if (r.huellasQr) guardarHuellas(r.huellasQr);
       if (est.vista === 'datos') { pintarCategorias(); validarCeco(); }
     } catch (e) {
       if (e.codigo === 'clave') toast('La clave de acceso no es válida: revisa Ajustes', 5000);
@@ -1657,14 +2216,21 @@
     $('#btnAjustes').onclick = () => ir('ajustes');
     $$('[data-ir]').forEach(b => { b.onclick = () => (b.dataset.ir === 'inicio' ? volverInicio() : ir(b.dataset.ir)); });
 
-    $('#btnEscanear').onclick = async () => { if (await descartarSiHay()) { nuevaCaptura(); abrirCamara(); } };
-    $('#btnGaleria').onclick = async () => { if (await descartarSiHay()) { nuevaCaptura(); $('#inGaleria').click(); } };
-    $('#btnPdf').onclick = async () => { if (await descartarSiHay()) { nuevaCaptura(); $('#inPdf').click(); } };
+    const libre = () => Date.now() >= (est.bloqueoToques || 0);
+    $('#btnEscanear').onclick = async () => { if (libre() && await descartarSiHay()) { nuevaCaptura(); abrirCamara(); } };
+    $('#btnGaleria').onclick = async () => { if (libre() && await descartarSiHay()) { nuevaCaptura(); $('#inGaleria').click(); } };
+    $('#btnPdf').onclick = async () => { if (libre() && await descartarSiHay()) { nuevaCaptura(); $('#inPdf').click(); } };
     $('#btnRefrescar').onclick = () => refrescarResumen(true);
     $('#btnEnviarCola').onclick = enviarColaManual;
     $('#btnDescartarCola').onclick = descartarBloqueados;
     $('#btnRetomar').onclick = () => { $('#avisoSesion').hidden = true; pintarPaginas(); ir('paginas'); };
-    $('#btnDescartar').onclick = () => { nuevaCaptura(); $('#avisoSesion').hidden = true; };
+    // Tras cerrar un aviso, el segundo toque de un doble toque no debe caer en el botón que sube a su lugar
+    $('#btnDescartar').onclick = () => { nuevaCaptura(); $('#avisoSesion').hidden = true; est.bloqueoToques = Date.now() + 450; };
+    $('#btnSeguirActa').onclick = async () => { const b = await leerBorrador(); if (b) abrirEntrega(b.tipo, b); else revisarBorrador(); };
+    $('#btnDescartarActa').onclick = async () => {
+      const si = await preguntar('Descartar el acta', '¿Borrar el acta sin terminar, con sus firmas?', 'Descartar', 'Conservar');
+      if (si) { borrarBorrador(); est.bloqueoToques = Date.now() + 450; }
+    };
 
     $('#inGaleria').onchange = e => tomarArchivos(e, 'galeria');
     $('#inCamaraNativa').onchange = e => tomarArchivos(e, 'camara');
@@ -1764,6 +2330,47 @@
 
     $('#btnOtro').onclick = () => volverInicio(() => { nuevaCaptura(); abrirCamara(); });
     $('#btnCorregirListo').onclick = () => { if (est.listoActual) abrirRegistro(est.listoActual); };
+    $('#btnEntrega').onclick = pedirEntrega;
+    $('#segEntrega').addEventListener('click', e => { const b = e.target.closest('button'); if (b) cambiarTipoEntrega(b.dataset.valor); });
+    $('#btnLeerQr').onclick = abrirLectorQr;
+    $('#btnCerrarQr').onclick = () => cerrarCapa();
+    $('#btnVolver').addEventListener('click', e => { if (Date.now() < (est.bloqueoToques || 0)) e.stopImmediatePropagation(); }, true);
+    $('#btnReubicar').onclick = buscarUbicacion;
+    $('#btnFotoEntrega').onclick = () => $('#inFotoEntrega').click();
+    $('#inFotoEntrega').onchange = ev => { const f = ev.target.files[0]; ev.target.value = ''; usarFotoEntrega(f); };
+    $$('#v-entrega [data-borrar]').forEach(b => { b.onclick = () => { if (firmas) { firmas[b.dataset.borrar].borrar(); tocarEntrega(); } }; });
+    $('#btnRegistrarEntrega').onclick = registrarEntrega;
+    // Lo que sale en la declaración: si cambia después de firmar, se vuelve a firmar
+    $('#eUltimos4').addEventListener('input', ev => { ev.target.value = soloDigitos(ev.target.value).slice(0, 4); });
+    $('#eSaldo').addEventListener('input', ev => {
+      const d = soloDigitos(ev.target.value).replace(/^0+(?=\d)/, '');     // "0" es un saldo válido (tarjeta vacía)
+      ev.target.value = d ? miles(Number(d)) : '';
+    });
+    IDS_ENTREGA.forEach(id => document.getElementById(id).addEventListener('input', () => {
+      if (!est.entrega) return;
+      if (IDS_DECLARACION.includes(id)) invalidarFirmas();
+      tocarEntrega();
+      pintarDeclaracion();
+    }));
+    ['eEntregaRut', 'eRecibeRut'].forEach(id => document.getElementById(id).addEventListener('blur', () => {
+      pintarEstadoRut(id);
+      pintarDeclaracion();
+    }));
+    $('#eConforme').addEventListener('change', ev => {
+      if (!est.entrega) return;
+      est.entrega.momentoLeido = ev.target.checked ? new Date().toISOString() : null;   // la hora que ambos confirmaron
+      ev.target.classList.remove('invalido');
+      tocarEntrega();
+      pintarDeclaracion();
+    });
+    // La cola se envía sola: al volver a la app, al recuperar la señal y cada 45 s mientras quede algo pendiente
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') enviarCola(true); });
+    setInterval(async () => {
+      let items = [];
+      try { items = await Api.pendientes(); } catch (e) { return; }
+      if (navigator.onLine && items.some(i => (i.intentos || 0) < 3)) enviarCola(true);
+    }, 45000);
+    window.addEventListener('resize', () => { if (est.vista === 'entrega' && firmas) { firmas.entrega.preparar(); firmas.recibe.preparar(); } });
     $('#btnVerMas').onclick = verMas;
     $('#rgCorregir').onclick = entrarEdicion;
     $('#rgDeshacer').onclick = deshacerRegistro;
@@ -1778,6 +2385,8 @@
     $('#avisoDemo').hidden = !Api.demo;
     est.listas = leerLocal('listas');
     est.tarjetas = leerLocal('tarjetas') || {};
+    est.huellasQr = leerLocal('huellasQr') || {};
+    if (leerLocal('custodia')) pintarCustodia(leerLocal('custodia'));
     prepararInstalacion();
     enlazar();
     await restaurarSesion();
