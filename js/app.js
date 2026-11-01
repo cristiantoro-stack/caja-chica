@@ -1,6 +1,6 @@
 /* App Caja Chica · flujo: capturar → revisar páginas → datos del gasto → guardar en Drive y en la planilla. */
 (() => {
-  const VERSION = '1.2.0';
+  const VERSION = '1.3.0';
   const MAX_BYTES = 20 * 1048576;
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
@@ -28,7 +28,12 @@
     listoActual: null,
     entrega: null,        // acta en curso: { tipo, qr, ubicacion, foto, fotoUrl, idCliente, enviando, descartar }
     custodia: [],         // en poder de quién está cada tarjeta (lo informa el servidor)
-    huellasQr: {}         // huella del QR de la tarjeta → últimos 4 dígitos
+    huellasQr: {},        // huella del QR de la tarjeta → últimos 4 dígitos
+    personas: [], plantillas: [], proveedores: [],   // para llenar en un toque (los entrega el servidor en config)
+    plantilla: null,      // rendición frecuente aplicada a la captura en curso
+    plantillaSugerida: null, verTodasPlantillas: false,
+    formularioGuardado: null,   // datos del gasto recuperados del teléfono: se aplican al volver a "Datos del gasto"
+    etapa: undefined      // pantalla de trabajo guardada en el teléfono, para retomarla si Android cierra la app
   };
   let cadena = Promise.resolve();      // las fotos se procesan de a una (cuida la memoria del teléfono)
 
@@ -97,6 +102,8 @@
     if (vista === 'registro') pintarRegistro();
     if (vista === 'paginas') pintarPaginas();
     if (vista === 'entrega' && est.entrega) $('#tituloVista').textContent = est.entrega.tipo === 'Devolución' ? 'Devolución de tarjeta' : 'Entrega de tarjeta';
+    if (vista === 'entrega') pintarPersonasActa();
+    guardarEtapa(['paginas', 'datos', 'entrega'].includes(vista) && !(vista === 'datos' && est.edicion) ? vista : null);
   }
 
   function ir(vista) {
@@ -149,7 +156,7 @@
       $('#dialogoNo').textContent = no || '';
       $('#dialogoNo').hidden = !no;
       area.hidden = !campo;
-      area.value = '';
+      area.value = campo && campo.valor ? campo.valor : '';
       area.classList.remove('invalido');
       area.placeholder = campo ? campo.placeholder || '' : '';
       est.dialogo = () => {
@@ -196,11 +203,11 @@
       return;
     }
     if (est.capa) {
-      const capa = est.capa;
+      const capa = est.capa, deActa = capa === 'camara' && camara && camara.destino === 'acta';
       cerrarCapaSinHistorial();
       let siguiente = est.trasCerrar;
       est.trasCerrar = null;
-      if (capa === 'camara' && !siguiente && est.paginas.length) siguiente = 'paginas';   // "atrás" con fotos tomadas
+      if (capa === 'camara' && !deActa && !siguiente && est.paginas.length) siguiente = 'paginas';   // "atrás" con fotos tomadas
       if (siguiente === 'inicio') volverInicio();
       else if (siguiente && siguiente !== est.vista) ir(siguiente);
       else if (est.vista === 'paginas') pintarPaginas();
@@ -354,20 +361,141 @@
 
   function revisarSesion() {
     const n = est.paginas.length;
-    $('#avisoSesion').hidden = !n || est.vista !== 'inicio';
-    if (n) $('#textoSesion').textContent = `Tienes una captura sin terminar (${paginasTexto(n)}).`;
+    $('#avisoSesion').hidden = !hayDocumento() || est.vista !== 'inicio';
+    if (hayDocumento()) $('#textoSesion').textContent = `Tienes una captura sin terminar (${n ? paginasTexto(n) : 'PDF'}).`;
   }
 
   /** Recupera una captura guardada en el teléfono (por ejemplo, si el sistema cerró Chrome). */
   async function restaurarSesion() {
-    let s = null;
-    try { s = await DB.leer('sesion', 'actual'); } catch (e) { s = null; }
-    if (!s || !s.paginas || !s.paginas.length || est.paginas.length) return;
-    est.paginas = s.paginas.map(p => Object.assign({}, p, { miniUrl: URL.createObjectURL(p.mini) }));
+    let s = null, f = null;
+    try { s = await DB.leer('sesion', 'actual'); f = await DB.leer('sesion', 'formulario'); } catch (e) { s = null; }
+    if (!s || est.paginas.length || est.pdf) return;
+    if (s.pdf && s.pdf.blob) est.pdf = { blob: s.pdf.blob, nombre: s.pdf.nombre };
+    else if (!s.paginas || !s.paginas.length) return;
+    est.paginas = (est.pdf ? [] : s.paginas).map(p => Object.assign({}, p, { miniUrl: URL.createObjectURL(p.mini) }));
+    est.formularioGuardado = f && f.valores ? f : null;
     est.origen = s.origen;
     est.capturadoEn = s.capturadoEn;
     est.modoTira = s.modoTira || 'auto';
     $('#chkUnir').checked = !!s.unir;
+  }
+
+  // ---------- Retomar donde quedó: la pantalla de trabajo y lo escrito se guardan en el teléfono ----------
+  // Si Android cierra la app (por ejemplo, al abrir otra), al volver sigue en la misma pantalla y con los mismos datos.
+
+  let relojFormulario = null;
+
+  async function leerEtapa() {
+    try {
+      const e = await DB.leer('sesion', 'etapa');
+      return e && e.vista && Date.now() - (e.guardado || 0) < 3 * 3600000 ? e.vista : null;   // más antigua: la ofrece el inicio
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function guardarEtapa(vista) {
+    if (est.etapa === vista) return;
+    est.etapa = vista;
+    try {
+      if (vista) await DB.guardar('sesion', 'etapa', { vista, guardado: Date.now() });
+      else await DB.borrar('sesion', 'etapa');
+    } catch (e) { /* sin IndexedDB: solo no se retoma sola */ }
+  }
+
+  /** Al abrir la app: vuelve a la pantalla en que estaba si Android la cerró. */
+  async function retomarEtapa(vista) {
+    if (vista === 'entrega') {
+      const b = await leerBorrador();
+      if (b && est.vista === 'inicio') { abrirEntrega(b.tipo, b); toast('Seguimos con el acta que estabas llenando'); }
+      return;
+    }
+    if (hayDocumento() && est.vista === 'inicio') { retomarCaptura(vista); toast('Seguimos donde quedaste'); }
+  }
+
+  /** Seguir la captura: a "Datos del gasto" si ya se estaban llenando (o es un PDF); si no, a las páginas. */
+  function retomarCaptura(vista) {
+    $('#avisoSesion').hidden = true;
+    if (est.pdf || vista === 'datos' || (!vista && est.formularioGuardado)) { entrarDatos(); return; }
+    pintarPaginas();
+    ir('paginas');
+  }
+
+  /** Entra a "Datos del gasto": aplica lo guardado en el teléfono (si Android cerró la app) o lee el documento. */
+  function entrarDatos() {
+    ir('datos');
+    prepararDatos();
+    const f = est.formularioGuardado;
+    est.formularioGuardado = null;
+    if (f) aplicarFormularioGuardado(f);
+    if (f && f.lectura && f.paginasClave === clavePaginas()) {
+      est.lectura = f.lectura;
+      pintarLectura(f.lectura.sugeridos && f.lectura.sugeridos.fecha ? 'ok' : 'ok-sin-fecha');
+      pintarControlTarjeta();
+      revisarMonto();
+    } else {
+      leerDocumento();
+    }
+  }
+
+  /** Identifica el documento en curso (páginas y sus ediciones, o el PDF): una lectura guardada vale solo para el mismo. */
+  const clavePaginas = () => (est.pdf ? 'pdf:' + est.pdf.nombre + ':' + est.pdf.blob.size : est.paginas.map(p => p.id + ':' + (p.version || 0)).join('|'));
+
+  /** Cambiaron las páginas: la lectura anterior (también la guardada en el teléfono) ya no sirve. */
+  function olvidarLectura() {
+    est.lectura = null;
+    if (est.formularioGuardado) est.formularioGuardado.lectura = null;
+  }
+
+  function formularioActual() {
+    const valores = {};
+    IDS_FORMULARIO.forEach(id => { valores[id] = document.getElementById(id).value; });
+    return {
+      valores, categoria: est.categoria, movimiento: est.movimiento, tocados: Array.from(est.tocados), plantilla: est.plantilla,
+      sugeridos: IDS_FORMULARIO.filter(id => document.getElementById(id).classList.contains('sugerido')), lectura: est.lectura,
+      paginasClave: clavePaginas()
+    };
+  }
+
+  /** Lo escrito en "Datos del gasto" se guarda poco después de cada cambio (no durante una corrección). */
+  function tocarFormulario() {
+    if (est.edicion || est.vista !== 'datos' || !hayDocumento()) return;
+    clearTimeout(relojFormulario);
+    relojFormulario = setTimeout(guardarFormulario, 600);
+  }
+
+  async function guardarFormulario() {
+    clearTimeout(relojFormulario);
+    relojFormulario = null;
+    if (est.edicion || !hayDocumento()) return;
+    try { await DB.guardar('sesion', 'formulario', Object.assign(formularioActual(), { guardado: Date.now() })); } catch (e) { /* sin espacio */ }
+  }
+
+  function aplicarFormularioGuardado(f) {
+    est.movimiento = f.movimiento || 'Desembolso MP';
+    est.tocados = new Set(f.tocados || []);
+    est.plantilla = f.plantilla || null;
+    elegirMovimiento(est.movimiento);
+    const v = f.valores || {};
+    IDS_FORMULARIO.forEach(id => {
+      if (v[id] === undefined) return;
+      const el = document.getElementById(id);
+      if (el.tagName === 'SELECT' && v[id] && !opciones('#' + id).includes(v[id])) el.insertAdjacentHTML('beforeend', `<option>${esc(v[id])}</option>`);
+      el.value = v[id];
+    });
+    (f.sugeridos || []).forEach(id => document.getElementById(id).classList.add('sugerido'));
+    est.categoria = f.categoria || '';
+    pintarCategorias();
+    validarRut();
+    validarCeco();
+    pintarControlTarjeta();
+    pintarPlantillas();
+  }
+
+  /** Al salir de la app: lo que esperaba su medio segundo se guarda de inmediato. */
+  function guardarPendientes() {
+    if (relojFormulario) guardarFormulario();
+    if (relojBorrador && est.entrega) guardarBorrador();
   }
 
   // ---------- Captura ----------
@@ -383,13 +511,17 @@
     soltarUltimo();
     est.paginas.forEach(liberar);
     Object.assign(est, { paginas: [], pdf: null, origen: null, capturadoEn: null, lectura: null, categoria: '', movimiento: 'Desembolso MP',
-      tira: null, modoTira: 'auto', modoCamara: 'documento' });
+      tira: null, modoTira: 'auto', modoCamara: 'documento', plantilla: null, plantillaSugerida: null, verTodasPlantillas: false,
+      formularioGuardado: null });
     est.tocados = new Set();
     est.lecturaId++;
     $('#chkUnir').checked = false;
     mostrarTiraEn(null);
     limpiarFormulario();
+    clearTimeout(relojFormulario);
+    relojFormulario = null;
     DB.borrar('sesion', 'actual').catch(() => {});
+    DB.borrar('sesion', 'formulario').catch(() => {});
   }
 
   /** Suelta lo recién guardado (ya no se ofrecerá volver a corregirlo con las mismas fotos). */
@@ -405,12 +537,14 @@
     return preguntar('Captura sin terminar', n ? `¿Descartar ${n === 1 ? 'la página capturada' : `las ${n} páginas capturadas`}?` : '¿Descartar el PDF sin guardar?', 'Descartar', 'Conservar');
   }
 
-  function agregarFoto(blob, origen) {
-    const p = { id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), rot: 0, modo: 'documento', procesando: true };
+  function agregarFoto(blob, origen, captura) {
+    const p = { id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), rot: 0, modo: 'documento', procesando: true,
+      captura: captura || { via: origen } };
     est.paginas.push(p);
     est.origen = est.origen || origen;
     est.capturadoEn = est.capturadoEn || new Date().toISOString();
-    est.lectura = null;
+    olvidarLectura();
+    if (!est.etapa) guardarEtapa('paginas');          // la cámara se abrió desde el inicio: si Android cierra la app, se vuelve aquí
     pintarPaginas();
     pintarContador();
     cadena = cadena.then(async () => {
@@ -450,17 +584,18 @@
     est.pdf = { blob, nombre };
     est.origen = origen;
     est.capturadoEn = new Date().toISOString();
-    ir('datos');
-    prepararDatos();
-    leerDocumento();
+    guardarSesion();
+    entrarDatos();
   }
 
   async function guardarSesion() {
     const listas = est.paginas.filter(p => !p.procesando && p.salida);
     try {
-      if (!listas.length) { await DB.borrar('sesion', 'actual'); return; }
+      if (!listas.length && !est.pdf) { await DB.borrar('sesion', 'actual'); return; }
       await DB.guardar('sesion', 'actual', {
-        paginas: listas.map(p => ({ id: p.id, fuente: p.fuente, quad: p.quad, rot: p.rot, modo: p.modo, salida: p.salida, mini: p.mini, ancho: p.ancho, alto: p.alto, version: p.version })),
+        paginas: listas.map(p => ({ id: p.id, fuente: p.fuente, quad: p.quad, rot: p.rot, modo: p.modo, salida: p.salida, mini: p.mini, ancho: p.ancho, alto: p.alto,
+          version: p.version, captura: p.captura || null })),
+        pdf: est.pdf ? { blob: est.pdf.blob, nombre: est.pdf.nombre } : null,
         origen: est.origen, capturadoEn: est.capturadoEn, unir: $('#chkUnir').checked, modoTira: est.modoTira
       });
     } catch (e) { /* sin espacio en el teléfono: la captura sigue en memoria */ }
@@ -660,7 +795,7 @@
   function elegirModoCamara(modo) {
     est.modoCamara = modo;
     $$('.camara-modos button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.modo === modo)));
-    $('#camaraAyuda').textContent = modo === 'tramos' ? 'De cerca, arriba → abajo, repitiendo 4–5 líneas' : 'Encuadra el documento completo';
+    pintarAyudaCamara(camara && camara.oscuro ? 'luz' : null);
     if (modo === 'tramos' && !$('#chkUnir').checked) {
       $('#chkUnir').checked = true;
       guardarSesion();
@@ -669,22 +804,32 @@
   }
 
   // ---------- Cámara dentro de la app ----------
+  //
+  // La foto sale del video en vivo, ya enfocado y con la luz ajustada, a la resolución más alta que entregue la cámara
+  // (hasta ~12 MP). Al tocar el botón se espera a que el teléfono quede quieto (giroscopio) y de esa ráfaga corta se
+  // guarda el cuadro más nítido (Estabilizador). Antes la foto se pedía aparte y en Android llegaba 1–2 s después del
+  // toque, cuando la mano ya se había movido. Si la cámara solo entrega video de baja resolución se usa la foto
+  // completa, con el aviso "no muevas el teléfono" hasta que llega. "Cámara del teléfono" abre la de Android.
 
-  let flujo = null, captura = null, linterna = false, abriendoCamara = false;
+  let flujo = null, captura = null, linterna = false, abriendoCamara = false, camara = null, relojCamara = null;
+  const VIDEO_BAJO = 3e6;          // bajo ~3 MP por cuadro conviene la foto completa del teléfono
 
-  async function abrirCamara() {
+  /** destino: 'documento' (páginas de la boleta) o 'acta' (una foto del momento de la entrega). */
+  async function abrirCamara(destino = 'documento') {
     if (abriendoCamara || flujo) return;
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('#inCamaraNativa').click(); return; }
+    const nativa = destino === 'acta' ? '#inFotoEntrega' : '#inCamaraNativa';
+    if (leerLocal('camaraNativa') || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $(nativa).click(); return; }
     abriendoCamara = true;
     try {
       try {
+        // 4:3 a ~12 MP (el sensor completo); si no existe, la cámara entrega la resolución más cercana
         flujo = await navigator.mediaDevices.getUserMedia({
           audio: false,
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } }
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 4032 }, height: { ideal: 3024 } }
         });
       } catch (e) {
         toast(e.name === 'NotAllowedError' ? 'Sin permiso de cámara: se abre la cámara del teléfono' : 'Se abre la cámara del teléfono');
-        $('#inCamaraNativa').click();
+        $(nativa).click();
         return;
       }
       const video = $('#video');
@@ -694,16 +839,23 @@
       pista.onended = () => { if (est.capa === 'camara') cerrarCapa(); };   // otra app tomó la cámara
       captura = 'ImageCapture' in window ? new ImageCapture(pista) : null;
       const cap = pista.getCapabilities ? pista.getCapabilities() : {};
+      camara = { destino, cap, oscuro: false };
       linterna = false;
       $('#btnFlash').hidden = !cap.torch;
-      $('#btnFlash').classList.remove('activo');
-      if (cap.focusMode && cap.focusMode.includes('continuous')) {
-        pista.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
-      }
+      $('#btnFlash').classList.remove('activo', 'sugerido');
+      // Enfoque, luz y blancos automáticos y continuos
+      const ajustes = {};
+      if (cap.focusMode && cap.focusMode.includes('continuous')) ajustes.focusMode = 'continuous';
+      if (cap.exposureMode && cap.exposureMode.includes('continuous')) ajustes.exposureMode = 'continuous';
+      if (cap.whiteBalanceMode && cap.whiteBalanceMode.includes('continuous')) ajustes.whiteBalanceMode = 'continuous';
+      if (Object.keys(ajustes).length) pista.applyConstraints({ advanced: [ajustes] }).catch(() => {});
+      $('#capaCamara').classList.toggle('foto-simple', destino === 'acta');
       $('#capaCamara').hidden = false;
       abrirCapa('camara');
+      Estabilizador.escucharGiro(true);
+      vigilarCamara();
       pintarContador();
-      elegirModoCamara(est.modoCamara);
+      if (destino === 'acta') { $('#camaraGuia').hidden = true; pintarAyudaCamara(); } else elegirModoCamara(est.modoCamara);
     } finally {
       abriendoCamara = false;
     }
@@ -713,54 +865,166 @@
     if (flujo) flujo.getTracks().forEach(t => { t.onended = null; t.stop(); });
     flujo = null;
     captura = null;
+    camara = null;
+    clearInterval(relojCamara);
+    relojCamara = null;
+    Estabilizador.escucharGiro(false);
     $('#video').srcObject = null;
     $('#capaCamara').hidden = true;
-    $('#btnDisparar').classList.remove('ocupado');
+    $('#btnDisparar').classList.remove('ocupado', 'quieto', 'movido');
+    ['#contador', '#btnCerrarCamara', '#btnCamaraTelefono'].forEach(b => { $(b).disabled = false; });
   }
 
-  /** Foto a resolución alta pero acotada (~12 MP): evita que el teléfono se quede sin memoria. */
+  /** Texto de ayuda de la cámara: el del modo, o el aviso del momento (mantener firme, foto en curso, poca luz). */
+  function pintarAyudaCamara(estado) {
+    const ayuda = $('#camaraAyuda');
+    const base = camara && camara.destino === 'acta' ? 'Foto de la persona con la tarjeta'
+      : est.modoCamara === 'tramos' ? 'De cerca, arriba → abajo, repitiendo 4–5 líneas' : 'Encuadra el documento completo';
+    const avisos = {
+      firme: 'Mantén firme el teléfono…', quieto: 'Quieto ✓ tomando la foto', foto: 'Tomando la foto: no muevas el teléfono',
+      luz: 'Poca luz: enciende la linterna para que salga nítida'
+    };
+    ayuda.textContent = avisos[estado] || base;
+    ayuda.classList.toggle('aviso', !!avisos[estado]);
+  }
+
+  /** Mientras la cámara está abierta: el anillo del botón muestra si el teléfono está quieto y, con poca luz, se sugiere la linterna. */
+  function vigilarCamara() {
+    clearInterval(relojCamara);
+    const lienzo = document.createElement('canvas');
+    let vueltas = 0;
+    relojCamara = setInterval(() => {
+      const c = camara, boton = $('#btnDisparar');
+      if (!flujo || !c || est.capa !== 'camara') return;
+      const g = Estabilizador.giroReciente(250);
+      boton.classList.toggle('quieto', g !== null && g < Estabilizador.UMBRAL_QUIETO);
+      boton.classList.toggle('movido', g !== null && g >= Estabilizador.UMBRAL_QUIETO);
+      if (++vueltas % 4 || boton.classList.contains('ocupado')) return;      // la luz, cada ~0,6 s
+      const luz = Estabilizador.luzDe($('#video'), lienzo), oscuro = luz !== null && luz < 70 && !!c.cap.torch && !linterna;
+      $('#btnFlash').classList.toggle('sugerido', oscuro);
+      if (oscuro !== c.oscuro) { c.oscuro = oscuro; pintarAyudaCamara(oscuro ? 'luz' : null); }
+    }, 150);
+  }
+
+  /** Tocar la imagen enfoca y mide la luz en ese punto (si la cámara lo permite). */
+  function enfocarEn(e) {
+    const c = camara, v = $('#video');
+    if (!flujo || !c || !v.videoWidth) return;
+    // El video se muestra recortado para llenar la pantalla (object-fit: cover): se pasa el toque a coordenadas del cuadro
+    const r = v.getBoundingClientRect(), k = Math.max(r.width / v.videoWidth, r.height / v.videoHeight);
+    const ancho = v.videoWidth * k, alto = v.videoHeight * k;
+    const x = Math.min(1, Math.max(0, (e.clientX - r.left - (r.width - ancho) / 2) / ancho));
+    const y = Math.min(1, Math.max(0, (e.clientY - r.top - (r.height - alto) / 2) / alto));
+    const anillo = $('#anilloFoco');
+    anillo.style.left = e.clientX + 'px';
+    anillo.style.top = e.clientY + 'px';
+    anillo.classList.remove('activo');
+    void anillo.offsetWidth;
+    anillo.classList.add('activo');
+    const pista = flujo.getVideoTracks()[0], modos = c.cap.focusMode || [], punto = { pointsOfInterest: [{ x, y }] };
+    const continuo = () => {
+      if (camara === c && modos.includes('continuous')) pista.applyConstraints({ advanced: [Object.assign({ focusMode: 'continuous' }, punto)] }).catch(() => {});
+    };
+    if (modos.includes('single-shot')) {
+      pista.applyConstraints({ advanced: [Object.assign({ focusMode: 'single-shot' }, punto)] })
+        .then(() => setTimeout(continuo, 1500))
+        .catch(() => pista.applyConstraints({ advanced: [punto] }).catch(() => {}));
+    } else {
+      pista.applyConstraints({ advanced: [punto] }).catch(() => {});
+    }
+  }
+
+  /** Foto completa del teléfono (lenta: en Android tarda 1–2 s). Acotada a ~12 MP para no agotar la memoria. */
   async function fotoDeCaptura() {
     if (!captura) return null;
-    try {
+    const pedir = async () => {
       const pc = await captura.getPhotoCapabilities();
       const maxW = pc.imageWidth && pc.imageWidth.max, maxH = pc.imageHeight && pc.imageHeight.max;
       if (maxW && maxH) {
         const k = Math.min(1, 4032 / Math.max(maxW, maxH));
-        return await captura.takePhoto({ imageWidth: Math.round(maxW * k), imageHeight: Math.round(maxH * k) });
+        return captura.takePhoto({ imageWidth: Math.round(maxW * k), imageHeight: Math.round(maxH * k) });
       }
-      return await captura.takePhoto();
+      return captura.takePhoto();
+    };
+    try {
+      return await Promise.race([pedir(), new Promise(r => setTimeout(() => r(null), 6000))]);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** Nitidez de una foto completa medida igual que los cuadros del video (mismo recorte y escala): comparable. */
+  async function nitidezDe(blob, anchoRef) {
+    try {
+      const bmp = await createImageBitmap(blob), m = Estabilizador.medir(bmp, document.createElement('canvas'), anchoRef);
+      if (bmp.close) bmp.close();
+      return m ? m.nitidez : null;
     } catch (e) {
       return null;
     }
   }
 
   async function disparar() {
-    const boton = $('#btnDisparar');
-    if (!flujo || boton.classList.contains('ocupado')) return;
+    const boton = $('#btnDisparar'), v = $('#video'), c = camara;
+    if (!flujo || !c || boton.classList.contains('ocupado')) return;
+    if (!v.videoWidth) { toast('La cámara aún no está lista: intenta de nuevo'); return; }
     boton.classList.add('ocupado');
+    // Mientras se toma (hasta 2,5 s) no se puede cerrar ni terminar: la foto en curso se perdería
+    ['#btnListoCamara', '#contador', '#btnCerrarCamara', '#btnCamaraTelefono'].forEach(b => { $(b).disabled = true; });
+    let mejor = null;
     try {
+      pintarAyudaCamara(Estabilizador.hayGiro() && !Estabilizador.quieto() ? 'firme' : 'quieto');
+      mejor = await Estabilizador.rafaga(v, { cancelado: () => camara !== c, alCambiar: e => { if (camara === c) pintarAyudaCamara(e); } });
+      if (camara !== c) return;                         // se cerró la cámara mientras tanto
+      let blob = null, via = 'cuadro', nitidez = mejor ? mejor.nitidez : null;
+      // Video de baja resolución: la foto completa trae más detalle; se usa salvo que haya salido más borrosa que el mejor cuadro
+      if (captura && !c.fotoLenta && v.videoWidth * v.videoHeight < VIDEO_BAJO) {
+        pintarAyudaCamara('foto');
+        const t0 = performance.now(), foto = await fotoDeCaptura();
+        if (!foto || performance.now() - t0 > 4000) c.fotoLenta = (c.lentas = (c.lentas || 0) + 1) >= 2;   // dos veces: solo cuadros
+        if (foto && camara === c) {
+          const n = await nitidezDe(foto, mejor && mejor.medidaAncho);
+          if (!mejor || n === null || n >= mejor.nitidez * 0.7) { blob = foto; via = 'foto'; nitidez = n; }
+        }
+        if (linterna && flujo) flujo.getVideoTracks()[0].applyConstraints({ advanced: [{ torch: true }] }).catch(() => {});
+      }
+      if (camara !== c) return;
+      if (!blob) {
+        if (!mejor) throw new Error('No se pudo tomar la foto: intenta de nuevo');
+        blob = await Escaner.aJpeg(mejor.lienzo, 0.92);
+      }
+      // El destello y la vibración van recién ahora: antes de esto, moverse arruinaba la foto
       const d = $('#destello');
       d.classList.remove('activo');
       void d.offsetWidth;
       d.classList.add('activo');
-      let blob = await fotoDeCaptura();
-      if (!blob) {
-        const v = $('#video');
-        if (!v.videoWidth) throw new Error('La cámara aún no está lista: intenta de nuevo');
-        const c = document.createElement('canvas');
-        c.width = v.videoWidth;
-        c.height = v.videoHeight;
-        c.getContext('2d').drawImage(v, 0, 0);
-        blob = await Escaner.aJpeg(c, 0.92);
-      }
-      if (linterna && flujo) flujo.getVideoTracks()[0].applyConstraints({ advanced: [{ torch: true }] }).catch(() => {});
       if (navigator.vibrate) navigator.vibrate(25);
-      agregarFoto(blob, 'camara');
+      const info = {
+        via, ancho: via === 'cuadro' ? mejor.ancho : null, alto: via === 'cuadro' ? mejor.alto : null, video: v.videoWidth + 'x' + v.videoHeight,
+        nitidez: nitidez === null ? null : Math.round(nitidez), espera: mejor ? mejor.espera : null, cuadros: mejor ? mejor.cuadros : 0,
+        giro: mejor && mejor.giro !== null ? Math.round(mejor.giro * 10) / 10 : null
+      };
+      if (c.destino === 'acta') { cerrarCapa(); usarFotoEntrega(blob); return; }
+      agregarFoto(blob, 'camara', info);
     } catch (e) {
       toast(e.message || 'No se pudo tomar la foto');
     } finally {
-      boton.classList.remove('ocupado');
+      if (mejor && mejor.lienzo) mejor.lienzo.width = mejor.lienzo.height = 0;   // suelta la memoria del cuadro (hasta 12 MP)
+      // P1: si la cámara se cerró y se volvió a abrir, el botón es de la toma nueva (detenerCamara ya lo dejó libre)
+      if (camara === c) {
+        boton.classList.remove('ocupado');
+        ['#contador', '#btnCerrarCamara', '#btnCamaraTelefono'].forEach(b => { $(b).disabled = false; });
+        pintarContador();
+        pintarAyudaCamara(c.oscuro ? 'luz' : null);
+      }
     }
+  }
+
+  /** "Cámara del teléfono": la de Android (estabilizador óptico, HDR), una foto a la vez. */
+  function usarCamaraTelefono() {
+    const destino = camara ? camara.destino : 'documento';
+    $(destino === 'acta' ? '#inFotoEntrega' : '#inCamaraNativa').click();     // dentro del toque: Android lo exige
+    cerrarCapa();
   }
 
   function pintarContador() {
@@ -845,14 +1109,14 @@
   function aplicarEdicion() {
     const { p, fuente, quad, rot, modo } = ed;
     Object.assign(p, { quad, rot, modo, procesando: true });
-    est.lectura = null;
+    olvidarLectura();
     cerrarCapa();
     pintarPaginas();
     cadena = cadena.then(async () => {
       try {
         const nuevo = await Escaner.procesar(fuente, p);
         liberar(p);
-        Object.assign(p, nuevo);
+        Object.assign(p, nuevo, { liberada: false });      // sigue viva: solo se soltaron sus imágenes anteriores
         p.miniUrl = URL.createObjectURL(p.mini);
         p.version = (p.version || 0) + 1;
       } catch (e) {
@@ -869,7 +1133,7 @@
     const p = ed.p;
     liberar(p);
     est.paginas = est.paginas.filter(x => x !== p);
-    est.lectura = null;
+    olvidarLectura();
     guardarSesion();
     cerrarCapa(est.paginas.length ? null : 'inicio');
     unirPaginas();
@@ -888,6 +1152,7 @@
       .forEach(id => { document.getElementById(id).value = ''; });
     $$('.sugerido, .invalido').forEach(el => el.classList.remove('sugerido', 'invalido'));
     $('#fRinde').value = Api.config().nombre || '';
+    $('#fMonto').placeholder = '$0';
     ['#lectura', '#sugMonto', '#controlTarjeta', '#grupoRepresentacion'].forEach(s => { $(s).hidden = true; });
     $('#rutEstado').textContent = '';
     $('#cecoEstado').textContent = '';
@@ -901,6 +1166,7 @@
     $('#fFecha').max = hoyISO();          // sin fecha por defecto: el mes de la rendición lo define la fecha del documento
     if (!$('#fRinde').value) $('#fRinde').value = Api.config().nombre || '';
     elegirMovimiento(est.movimiento);
+    pintarPlantillas();
   }
 
   function elegirMovimiento(mov) {
@@ -1043,6 +1309,8 @@
       if (t && t.resultado === 'coincide') $('#fMedio').value = 'Tarjeta MP';
       else if (r.mercadoPago && opciones('#fMedio').includes('QR Mercado Pago')) $('#fMedio').value = 'QR Mercado Pago';
     }
+    sugerirPorProveedor();
+    tocarFormulario();
   }
 
   function revisarMonto() {
@@ -1155,7 +1423,8 @@
         datos: d,
         archivo: { b64: await aBase64(archivo.blob), paginas: archivo.paginas, nombreOriginal: archivo.nombreOriginal },
         ocr: est.lectura ? { texto: est.lectura.texto, firma: est.lectura.firma } : null,
-        meta: { capturadoEn: est.capturadoEn, origen: est.origen, dispositivo: navigator.userAgent, versionApp: VERSION },
+        meta: { capturadoEn: est.capturadoEn, origen: est.origen, dispositivo: navigator.userAgent, versionApp: VERSION,
+          capturas: est.pdf ? null : est.paginas.map(p => p.captura || null), plantilla: est.plantilla || null },
         forzar: !!forzar
       };
       if (!Api.configurada()) throw new Api.ErrorApi('La app aún no está vinculada', 'config');
@@ -1165,8 +1434,9 @@
       est.ultimo = {
         id: r.id, paginas: est.paginas, pdf: est.pdf, origen: est.origen, capturadoEn: est.capturadoEn, lectura: est.lectura,
         tira: est.tira, modoTira: est.modoTira, unir: $('#chkUnir').checked, datos: d,
-        categoria: est.categoria, movimiento: est.movimiento, tocados: new Set(est.tocados)
+        categoria: est.categoria, movimiento: est.movimiento, tocados: new Set(est.tocados), plantilla: est.plantilla
       };
+      contarUso('plantillas', est.plantilla);
       await terminarSesion(true);
       mostrarListo(r, d, null);
     } catch (e) {
@@ -1179,6 +1449,7 @@
         }
       } else if ((e.codigo === 'red' || e.codigo === 'config') && payload) {
         await Api.encolar(payload);
+        contarUso('plantillas', est.plantilla);
         await terminarSesion();
         mostrarListo(null, d, e.codigo);
       } else {
@@ -1200,7 +1471,10 @@
     est.tira = null;
     mostrarTiraEn(null);
     est.lecturaId++;
-    try { await DB.borrar('sesion', 'actual'); } catch (e) { /* nada que borrar */ }
+    est.formularioGuardado = null;
+    clearTimeout(relojFormulario);
+    relojFormulario = null;
+    try { await DB.borrar('sesion', 'actual'); await DB.borrar('sesion', 'formulario'); } catch (e) { /* nada que borrar */ }
   }
 
   function mostrarListo(r, d, enCola) {
@@ -1227,6 +1501,8 @@
     }
     $('#listoEnlaces').hidden = !r;
     $('#btnCorregirListo').hidden = !r;
+    est.listoDatos = d;
+    $('#btnFrecuente').hidden = !d || !GASTOS.includes(d.movimiento);
     est.listoActual = r ? {
       id: r.id, fecha: d.fecha, monto: d.monto, proveedor: d.proveedor, detalle: d.detalle, movimiento: d.movimiento,
       tipoDoc: d.tipoDoc, numero: d.numero, estado: 'Pendiente revisión', respaldoUrl: r.respaldoUrl, controlTarjeta: r.controlTarjeta
@@ -1334,7 +1610,7 @@
     elegirMovimiento(est.movimiento);
     validarRut();
     validarCeco();
-    ['#lectura', '#sugMonto', '#controlTarjeta', '#campoRinde'].forEach(s => { $(s).hidden = true; });
+    ['#lectura', '#sugMonto', '#controlTarjeta', '#campoRinde', '#grupoFrecuentes'].forEach(s => { $(s).hidden = true; });
     $('#segMovimiento').classList.add('bloqueado');
     $('#avisoEdicion').hidden = false;
     $('#textoEdicion').textContent = f.estado === 'Pendiente revisión' || f.estado === 'Observado'
@@ -1475,7 +1751,10 @@
     pintarCategorias();
     validarRut();
     validarCeco();
+    est.plantilla = u.plantilla || null;
+    pintarPlantillas();
     if (est.lectura) { pintarLectura(est.lectura.sugeridos && est.lectura.sugeridos.fecha ? 'ok' : 'ok-sin-fecha'); pintarControlTarjeta(); revisarMonto(); }
+    guardarFormulario();
   }
 
   async function anularRegistro() {
@@ -1594,8 +1873,9 @@
     if (!e || !e.tocado || e.enviando) return;
     const campos = {};
     IDS_ENTREGA.forEach(id => { campos[id] = document.getElementById(id).value; });
+    const autos = IDS_ENTREGA.filter(id => document.getElementById(id).dataset.auto === '1');
     const datos = {
-      tipo: e.tipo, idCliente: e.idCliente, qr: e.qr, ubicacion: e.ubicacion, foto: e.foto || null, campos,
+      tipo: e.tipo, idCliente: e.idCliente, qr: e.qr, ubicacion: e.ubicacion, foto: e.foto || null, campos, autos,
       conforme: $('#eConforme').checked, momentoLeido: e.momentoLeido || null,
       firmas: firmas ? { entrega: firmas.entrega.datos(), recibe: firmas.recibe.datos() } : null, guardado: new Date().toISOString()
     };
@@ -1643,11 +1923,15 @@
     $('#eFotoMini').hidden = true;
     $('#eFotoTexto').textContent = 'Foto del momento (opcional)';
     if (b && b.foto) mostrarFotoEntrega(b.foto);
+    IDS_ENTREGA.forEach(id => { document.getElementById(id).dataset.auto = b && (b.autos || []).includes(id) ? '1' : ''; });
     if (!b) {
-      const yo = Api.config(), c = custodiaActual(), mp = String((est.tarjetas && est.tarjetas.mp) || '').replace(/\D/g, '');
+      const yo = yoCompleto(), c = custodiaActual(), mp = String((est.tarjetas && est.tarjetas.mp) || '').replace(/\D/g, '');
       $('#eUltimos4').value = (c && c.ultimos4) || mp || '';
-      const persona = (pre, p) => { $(`#e${pre}Nombre`).value = p.nombre || ''; $(`#e${pre}Rut`).value = p.rut || ''; $(`#e${pre}Cargo`).value = p.cargo || ''; };
-      if (tipo === 'Devolución') { persona('Entrega', { nombre: titularActual() }); persona('Recibe', yo); }
+      // Datos propuestos (de Ajustes o de la base de personas): elegir a otra persona los reemplaza
+      const persona = (pre, p) => {
+        [['Nombre', p.nombre], ['Rut', p.rut], ['Cargo', p.cargo]].forEach(([k, v]) => { const el = $(`#e${pre}${k}`); el.value = v || ''; el.dataset.auto = v ? '1' : ''; });
+      };
+      if (tipo === 'Devolución') { const t = titularActual(); persona('Entrega', buscarPersona(t) || { nombre: t }); persona('Recibe', yo); }
       else persona('Entrega', yo);
     }
     pintarQrEstado(b && b.qr ? 'QR leído ✓' : 'Sin escanear', b && b.qr ? 'ok' : '');
@@ -1706,11 +1990,14 @@
     if (!e || e.tipo === tipo) return;
     e.tipo = tipo;
     ['Nombre', 'Rut', 'Cargo'].forEach(k => {
-      const a = $(`#eEntrega${k}`), b = $(`#eRecibe${k}`), t = a.value;
+      const a = $(`#eEntrega${k}`), b = $(`#eRecibe${k}`), t = a.value, ta = a.dataset.auto;
       a.value = b.value;
       b.value = t;
+      a.dataset.auto = b.dataset.auto || '';
+      b.dataset.auto = ta || '';
     });
     $('#eRecibeCorreo').value = '';
+    $('#eRecibeCorreo').dataset.auto = '';
     ['eEntregaRut', 'eRecibeRut'].forEach(pintarEstadoRut);
     invalidarFirmas('Se borraron las firmas: firmen de nuevo');
     pintarTipoEntrega();
@@ -1973,6 +2260,7 @@
       if (e.foto) payload.foto = await aBase64(e.foto);
       const idCola = await Api.encolar(payload, 'entregarTarjeta');
       borrarBorrador();                          // desde aquí el acta vive en la cola del teléfono
+      recordarPersonas(payload);
       e.tocado = false;
       enviada = true;
       let r = null, enCola = null;
@@ -2044,6 +2332,256 @@
     }
   }
 
+  // ---------- Personas, rendiciones frecuentes y proveedores: llenar en un toque ----------
+  // La base vive en la planilla Rendición Caja Chica (hojas Personas y Plantillas) y el servidor la entrega en config.
+
+  const usoLocal = clave => leerLocal('uso.' + clave) || {};
+
+  function contarUso(clave, nombre) {
+    if (!nombre) return;
+    const u = usoLocal(clave), k = normalNombre(nombre);
+    u[k] = (u[k] || 0) + 1;
+    guardarLocal('uso.' + clave, u);
+  }
+
+  /** Primer nombre y primer apellido: "Ana María Demo Ejemplo" → "Ana Demo". */
+  function nombreCorto(nombre) {
+    const w = String(nombre || '').trim().split(/\s+/);
+    return w.length >= 4 ? `${w[0]} ${w[w.length - 2]}` : w.length === 3 ? `${w[0]} ${w[1]}` : w.join(' ');
+  }
+
+  /** La persona de la base con ese nombre: completo o, si no hay dudas, nombre y apellido. Con exacto, solo el completo. */
+  function buscarPersona(nombre, exacto) {
+    const k = normalNombre(nombre);
+    if (!k) return null;
+    const completo = est.personas.find(p => normalNombre(p.nombre) === k);
+    if (completo || exacto) return completo || null;
+    const cortos = est.personas.filter(p => normalNombre(nombreCorto(p.nombre)) === k);
+    return cortos.length === 1 ? cortos[0] : null;
+  }
+
+  /** Los datos propios (Ajustes), completados con la base de personas. */
+  function yoCompleto() {
+    const c = Api.config(), b = buscarPersona(c.nombre) || {};
+    return { nombre: c.nombre || b.nombre || '', rut: c.rut || b.rut || '', cargo: c.cargo || b.cargo || '' };
+  }
+
+  /** Personas, plantillas y proveedores del servidor (o los guardados en el teléfono, sin conexión). */
+  function usarRapido(r, local) {
+    if (Array.isArray(r.personas)) est.personas = r.personas.filter(p => p && p.nombre);
+    if (Array.isArray(r.plantillas)) est.plantillas = r.plantillas.filter(p => p && p.nombre);
+    if (Array.isArray(r.proveedores)) est.proveedores = r.proveedores.filter(p => p && p.nombre);
+    if (!local) guardarLocal('rapido', { personas: est.personas, plantillas: est.plantillas, proveedores: est.proveedores });
+    $('#listaPersonas').innerHTML = est.personas.map(p => `<option value="${esc(p.nombre)}">${esc(p.cargo || '')}</option>`).join('');
+    $('#listaProveedores').innerHTML = est.proveedores
+      .map(p => `<option value="${esc(p.nombre)}">${esc([p.rut, p.categoria].filter(Boolean).join(' · '))}</option>`).join('');
+    if (est.vista === 'datos') pintarPlantillas();
+    if (est.vista === 'entrega') pintarPersonasActa();
+  }
+
+  /** Chips con las personas más usadas (y quienes rinden en las rendiciones frecuentes): un toque llena nombre, RUT, cargo y correo. */
+  function pintarPersonasActa() {
+    if (!est.entrega) return;
+    const uso = usoLocal('personas'), rinden = new Set(est.plantillas.map(p => normalNombre(p.rinde)).filter(Boolean));
+    const puntos = p => (uso[normalNombre(p.nombre)] || 0) * 10
+      + (rinden.has(normalNombre(p.nombre)) || rinden.has(normalNombre(nombreCorto(p.nombre))) ? 3 : 0);
+    const orden = est.personas.map((p, i) => ({ p, i, n: puntos(p) })).sort((a, b) => b.n - a.n || a.i - b.i).map(x => x.p);
+    [['Entrega', 'Recibe'], ['Recibe', 'Entrega']].forEach(([pre, otro]) => {
+      const cont = document.getElementById(`e${pre}Personas`), actual = normalNombre(valor(`e${pre}Nombre`));
+      const delOtro = normalNombre(valor(`e${otro}Nombre`));
+      cont.innerHTML = '';
+      orden.filter(p => normalNombre(p.nombre) !== delOtro).slice(0, 6).forEach(p => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = nombreCorto(p.nombre);
+        b.title = p.nombre + (p.cargo ? ' · ' + p.cargo : '');
+        b.setAttribute('aria-pressed', String(normalNombre(p.nombre) === actual));
+        b.onclick = () => elegirPersona(pre, p, false);
+        cont.appendChild(b);
+      });
+    });
+  }
+
+  /**
+   * Llena los datos de la persona elegida. Con un toque (chip) se usan todos sus datos; al escribir su nombre solo se
+   * completan los campos vacíos o los que llenó antes otra persona elegida: lo escrito a mano no se pisa.
+   */
+  function elegirPersona(pre, p, desdeNombre) {
+    if (!est.entrega) return;
+    const campos = [[`e${pre}Nombre`, p.nombre], [`e${pre}Rut`, p.rut], [`e${pre}Cargo`, p.cargo]];
+    if (pre === 'Recibe') campos.push(['eRecibeCorreo', p.correo]);
+    const cambiados = [];
+    campos.forEach(([id, v]) => {
+      const el = document.getElementById(id), auto = el.dataset.auto === '1', vacio = !el.value.trim();
+      if (id.endsWith('Nombre') && desdeNombre) {
+        // "Ana Demo" escrito a mano: al salir del campo queda el nombre completo de la base
+        if (el.value !== p.nombre && document.activeElement !== el) { el.value = p.nombre; cambiados.push(id); }
+        return;
+      }
+      if (!desdeNombre) {
+        // Toque en la persona: todos sus datos, y vacío lo que la base no tiene (no queda el RUT de otra persona)
+        if (el.value !== (v || '')) { el.value = v || ''; cambiados.push(id); }
+        el.dataset.auto = v ? '1' : '';
+        return;
+      }
+      if (v && (vacio || auto)) {
+        if (el.value !== v) { el.value = v; cambiados.push(id); }
+        el.dataset.auto = '1';
+      } else if (!v && auto && !vacio) {
+        el.value = '';
+        el.dataset.auto = '';
+        cambiados.push(id);
+      }
+    });
+    if (cambiados.length) {
+      if (cambiados.some(id => IDS_DECLARACION.includes(id))) invalidarFirmas();
+      pintarEstadoRut(`e${pre}Rut`);
+      tocarEntrega();
+      pintarDeclaracion();
+    }
+    pintarPersonasActa();
+  }
+
+  /** El nombre escrito ya no es el de la persona elegida: se sueltan los datos que se habían llenado solos (RUT, cargo, correo). */
+  function soltarPersona(pre) {
+    const ids = [`e${pre}Rut`, `e${pre}Cargo`].concat(pre === 'Recibe' ? ['eRecibeCorreo'] : []), cambiados = [];
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (el.dataset.auto !== '1') return;
+      el.dataset.auto = '';
+      if (el.value) { el.value = ''; cambiados.push(id); }
+    });
+    if (!cambiados.length) return;
+    if (cambiados.some(id => IDS_DECLARACION.includes(id))) invalidarFirmas();
+    pintarEstadoRut(`e${pre}Rut`);
+    pintarDeclaracion();
+  }
+
+  /** Tras registrar un acta: quienes participaron quedan a mano (el servidor también los da de alta en la base). */
+  function recordarPersonas(a) {
+    [a.entrega, a.recibe].forEach(x => {
+      if (!x || !x.nombre) return;
+      contarUso('personas', x.nombre);
+      if (!buscarPersona(x.nombre, true)) est.personas.push({ nombre: x.nombre, rut: x.rut || '', cargo: x.cargo || '', area: '', correo: x.correo || '' });
+    });
+    usarRapido({});
+  }
+
+  function pintarPlantillas() {
+    const grupo = $('#grupoFrecuentes'), cont = $('#chipsFrecuentes');
+    if (est.edicion || !est.plantillas.length) { grupo.hidden = true; return; }
+    const uso = usoLocal('plantillas');
+    let orden = est.plantillas.map((p, i) => ({ p, i, n: uso[normalNombre(p.nombre)] || 0 })).sort((a, b) => b.n - a.n || a.i - b.i).map(x => x.p);
+    const sugerida = orden.find(p => p.nombre === est.plantillaSugerida);
+    if (sugerida) orden = [sugerida].concat(orden.filter(p => p !== sugerida));
+    const visibles = est.verTodasPlantillas ? orden : orden.slice(0, 8);
+    cont.innerHTML = '';
+    visibles.forEach(p => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = p.nombre;
+      b.setAttribute('aria-pressed', String(est.plantilla === p.nombre));
+      if (p === sugerida && est.plantilla !== p.nombre) b.classList.add('sugerida');
+      b.onclick = () => aplicarPlantilla(p);
+      cont.appendChild(b);
+    });
+    if (visibles.length < orden.length) {
+      const mas = document.createElement('button');
+      mas.type = 'button';
+      mas.className = 'mas';
+      mas.textContent = `Ver todas (${orden.length})`;
+      mas.onclick = () => { est.verTodasPlantillas = true; pintarPlantillas(); };
+      cont.appendChild(mas);
+    }
+    grupo.hidden = false;
+  }
+
+  /**
+   * Rendición frecuente: llena el contexto del gasto (categoría, CeCo, detalle, medio, quién rinde) y, si el documento no
+   * los trajo, el proveedor y su RUT. El monto y la fecha salen siempre del documento. Lo escrito a mano no se pisa.
+   */
+  function aplicarPlantilla(p) {
+    if (est.edicion) return;
+    const poner = (sel, v, campo) => {
+      const el = $(sel);
+      if (!v || (campo && est.tocados.has(campo))) return;
+      if (el.tagName === 'SELECT' && !opciones(sel).includes(v)) return;
+      el.value = v;
+      el.classList.add('sugerido');
+      el.classList.remove('invalido');
+    };
+    est.plantilla = p.nombre;
+    if (p.movimiento && p.movimiento !== est.movimiento && listas().movimientos.includes(p.movimiento)) elegirMovimiento(p.movimiento);
+    if (GASTOS.includes(est.movimiento)) {
+      const cat = listas().categorias.find(c => c.nombre === p.categoria);
+      if (cat) elegirCategoria(cat);
+      if (!est.tocados.has('ceco')) {
+        // Sin CeCo en la plantilla = depende del destino (oficina o proyecto): no se deja el de la categoría
+        if (p.ceco) poner('#fCeco', p.ceco, 'ceco');
+        else { $('#fCeco').value = ''; $('#fCeco').classList.remove('sugerido'); }
+      }
+      validarCeco();
+    }
+    poner('#fDetalle', p.detalle, 'detalle');
+    poner('#fMedio', p.medio, 'medio');
+    if (!$('#fTipo').classList.contains('sugerido')) poner('#fTipo', p.tipoDoc, 'tipoDoc');
+    if (!$('#fProveedor').value.trim()) poner('#fProveedor', p.proveedor, 'proveedor');
+    if (!$('#fRut').value.trim()) { poner('#fRut', p.rut, 'rut'); validarRut(); }
+    if (p.rinde) $('#fRinde').value = p.rinde;
+    if (p.monto && !$('#fMonto').value) $('#fMonto').placeholder = `Típico ${clp(p.monto)}`;
+    pintarControlTarjeta();
+    pintarPlantillas();
+    tocarFormulario();
+    toast(`«${p.nombre}»: revisa el monto y la fecha del documento`);
+  }
+
+  const cuerpoRut = s => { const r = rutInfo(s); return r && r.ok ? r.texto.replace(/\./g, '').split('-')[0] : ''; };
+
+  /** Proveedor ya usado (por RUT o nombre): completa su RUT, sugiere categoría y CeCo y destaca su rendición frecuente. */
+  function sugerirPorProveedor() {
+    if (est.edicion) return;
+    const rut = cuerpoRut($('#fRut').value), nombre = normalNombre($('#fProveedor').value);
+    const prov = est.proveedores.find(p => (rut && cuerpoRut(p.rut) === rut) || (nombre && normalNombre(p.nombre) === nombre));
+    const plantilla = est.plantillas.find(p => (rut && p.rut && cuerpoRut(p.rut) === rut) || (nombre && p.proveedor && normalNombre(p.proveedor) === nombre));
+    const sugerida = plantilla ? plantilla.nombre : null;
+    if (sugerida !== est.plantillaSugerida) { est.plantillaSugerida = sugerida; pintarPlantillas(); }
+    if (!prov) return;
+    if (!$('#fRut').value.trim() && prov.rut && !est.tocados.has('rut')) { $('#fRut').value = prov.rut; $('#fRut').classList.add('sugerido'); validarRut(); }
+    if (!est.plantilla && !est.categoria && prov.categoria && GASTOS.includes(est.movimiento)) {
+      const cat = listas().categorias.find(c => c.nombre === prov.categoria);
+      if (cat) elegirCategoria(cat);
+      if (prov.ceco && !est.tocados.has('ceco')) { $('#fCeco').value = prov.ceco; $('#fCeco').classList.add('sugerido'); validarCeco(); }
+    }
+  }
+
+  /** Después de guardar: deja este gasto como rendición frecuente (un botón en "Datos del gasto"). */
+  async function guardarFrecuente() {
+    const d = est.listoDatos;
+    if (!d) return;
+    const sugerido = [d.categoria, d.proveedor].filter(Boolean).join(' · ').slice(0, 60);
+    const nombre = await preguntar('Rendición frecuente', 'Queda como botón en "Datos del gasto": llena categoría, CeCo, detalle, medio, proveedor y quién rinde. El monto y la fecha se toman siempre del documento.',
+      'Guardar', 'Cancelar', { placeholder: 'Nombre del botón (ej: Desayuno empresa)', valor: sugerido });
+    if (!nombre) return;
+    const limpio = nombre.replace(/\s+/g, ' ').trim().slice(0, 60);
+    const existe = est.plantillas.some(p => normalNombre(p.nombre) === normalNombre(limpio));
+    if (existe && !(await preguntar('Ya existe', `Ya hay una rendición frecuente «${limpio}». ¿Reemplazarla con los datos de este gasto?`, 'Reemplazar', 'Cancelar'))) return;
+    const b = $('#btnFrecuente');
+    b.disabled = true;
+    try {
+      const r = await Api.llamar('guardarPlantillas', { reemplazar: true, completa: true, plantillas: [{ nombre: limpio, movimiento: d.movimiento, categoria: d.categoria,
+        ceco: d.ceco, detalle: d.detalle, proveedor: d.proveedor, rut: d.rut, tipoDoc: d.tipoDoc, medio: d.medio, rinde: d.rinde }] });
+      if (r.plantillas) usarRapido({ plantillas: r.plantillas });
+      b.hidden = true;
+      const visible = !r.plantillas || r.plantillas.some(p => normalNombre(p.nombre) === normalNombre(limpio));
+      toast(visible ? `Listo: «${limpio}» aparece en "Datos del gasto"` + ((r.avisos || []).length ? ` (${r.avisos[0]})` : '')
+        : `«${limpio}» quedó en la planilla, pero la app muestra solo las primeras 60: desactiva alguna que no se use`, 6000);
+    } catch (e) {
+      toast('No se pudo guardar: ' + e.message, 6000);
+    } finally {
+      b.disabled = false;
+    }
+  }
+
   // ---------- Ajustes y vinculación ----------
 
   function cargarAjustes() {
@@ -2057,6 +2595,7 @@
     $('#aTarjetaSan').value = '';
     $('#aTarjetaMP').placeholder = (est.tarjetas && est.tarjetas.mp) || 'Últimos 4';
     $('#aTarjetaSan').placeholder = (est.tarjetas && est.tarjetas.santander) || 'Opcional';
+    $('#aCamaraNativa').checked = !!leerLocal('camaraNativa');
     $('#estadoConexion').textContent = '';
     $('#version').textContent = `App Caja Chica v${VERSION} · Telconsulting`;
   }
@@ -2075,6 +2614,7 @@
     const rut = $('#aRut').value.trim(), infoRut = rut ? rutInfo(rut) : null;
     if (rut && !(infoRut && infoRut.ok)) { toast('Revisa tu RUT (o déjalo vacío)'); return; }
     Api.guardarConfig(Object.assign(conexion, { nombre: $('#aNombre').value.trim(), rut: infoRut ? infoRut.texto : '', cargo: $('#aCargo').value.trim() }));
+    guardarLocal('camaraNativa', $('#aCamaraNativa').checked);
     if (mp || san) {
       try {
         const r = await Api.llamar('configurar', Object.assign({}, mp ? { tarjetaMP: mp } : {}, san ? { tarjetaSantander: san } : {}));
@@ -2115,9 +2655,10 @@
       est.tarjetas = r.tarjetas || {};
       guardarLocal('listas', r.listas);
       guardarLocal('tarjetas', est.tarjetas);
+      usarRapido({ personas: r.personas, plantillas: r.plantillas, proveedores: r.proveedores });
       if (r.custodia) pintarCustodia(r.custodia);
       if (r.huellasQr) guardarHuellas(r.huellasQr);
-      if (est.vista === 'datos') { pintarCategorias(); validarCeco(); }
+      if (est.vista === 'datos') { pintarCategorias(); validarCeco(); pintarPlantillas(); }
     } catch (e) {
       if (e.codigo === 'clave') toast('La clave de acceso no es válida: revisa Ajustes', 5000);
     }
@@ -2223,7 +2764,7 @@
     $('#btnRefrescar').onclick = () => refrescarResumen(true);
     $('#btnEnviarCola').onclick = enviarColaManual;
     $('#btnDescartarCola').onclick = descartarBloqueados;
-    $('#btnRetomar').onclick = () => { $('#avisoSesion').hidden = true; pintarPaginas(); ir('paginas'); };
+    $('#btnRetomar').onclick = () => retomarCaptura(null);
     // Tras cerrar un aviso, el segundo toque de un doble toque no debe caer en el botón que sube a su lugar
     $('#btnDescartar').onclick = () => { nuevaCaptura(); $('#avisoSesion').hidden = true; est.bloqueoToques = Date.now() + 450; };
     $('#btnSeguirActa').onclick = async () => { const b = await leerBorrador(); if (b) abrirEntrega(b.tipo, b); else revisarBorrador(); };
@@ -2242,7 +2783,7 @@
 
     $('#btnMasCamara').onclick = () => abrirCamara();
     $('#btnMasGaleria').onclick = () => $('#inGaleria').click();
-    $('#btnContinuar').onclick = () => { ir('datos'); prepararDatos(); leerDocumento(); };
+    $('#btnContinuar').onclick = entrarDatos;
     $('#chkUnir').onchange = () => { guardarSesion(); unirPaginas(); };
     $('#btnRevisarTira').onclick = abrirTira;
     $('#tiraModo').onclick = cambiarModoTira;
@@ -2270,7 +2811,9 @@
     $$('.camara-modos button').forEach(b => { b.onclick = () => elegirModoCamara(b.dataset.modo); });
 
     $('#btnDisparar').onclick = disparar;
-    $('#btnCerrarCamara').onclick = () => cerrarCapa(est.paginas.length ? 'paginas' : null);
+    $('#btnCamaraTelefono').onclick = usarCamaraTelefono;
+    $('#video').addEventListener('click', enfocarEn);
+    $('#btnCerrarCamara').onclick = () => cerrarCapa(camara && camara.destino === 'acta' ? null : est.paginas.length ? 'paginas' : null);
     $('#btnListoCamara').onclick = () => cerrarCapa('paginas');
     $('#contador').onclick = () => { if (est.paginas.length) cerrarCapa('paginas'); };
     $('#btnFlash').onclick = () => {
@@ -2318,7 +2861,10 @@
       e.target.value = d ? miles(Number(d)) : '';
       revisarMonto();
     });
-    $('#fRut').addEventListener('blur', validarRut);
+    $('#fRut').addEventListener('blur', () => { validarRut(); sugerirPorProveedor(); });
+    $('#fProveedor').addEventListener('change', sugerirPorProveedor);
+    // Lo escrito en "Datos del gasto" se guarda en el teléfono mientras se llena
+    ['input', 'change', 'click'].forEach(t => $('#v-datos').addEventListener(t, tocarFormulario));
     $('#fCeco').addEventListener('input', validarCeco);
     $('#fMedio').addEventListener('change', pintarControlTarjeta);
     $('#segMovimiento').addEventListener('click', e => {
@@ -2330,13 +2876,14 @@
 
     $('#btnOtro').onclick = () => volverInicio(() => { nuevaCaptura(); abrirCamara(); });
     $('#btnCorregirListo').onclick = () => { if (est.listoActual) abrirRegistro(est.listoActual); };
+    $('#btnFrecuente').onclick = guardarFrecuente;
     $('#btnEntrega').onclick = pedirEntrega;
     $('#segEntrega').addEventListener('click', e => { const b = e.target.closest('button'); if (b) cambiarTipoEntrega(b.dataset.valor); });
     $('#btnLeerQr').onclick = abrirLectorQr;
     $('#btnCerrarQr').onclick = () => cerrarCapa();
     $('#btnVolver').addEventListener('click', e => { if (Date.now() < (est.bloqueoToques || 0)) e.stopImmediatePropagation(); }, true);
     $('#btnReubicar').onclick = buscarUbicacion;
-    $('#btnFotoEntrega').onclick = () => $('#inFotoEntrega').click();
+    $('#btnFotoEntrega').onclick = () => abrirCamara('acta');
     $('#inFotoEntrega').onchange = ev => { const f = ev.target.files[0]; ev.target.value = ''; usarFotoEntrega(f); };
     $$('#v-entrega [data-borrar]').forEach(b => { b.onclick = () => { if (firmas) { firmas[b.dataset.borrar].borrar(); tocarEntrega(); } }; });
     $('#btnRegistrarEntrega').onclick = registrarEntrega;
@@ -2348,10 +2895,29 @@
     });
     IDS_ENTREGA.forEach(id => document.getElementById(id).addEventListener('input', () => {
       if (!est.entrega) return;
+      document.getElementById(id).dataset.auto = '';       // escrito a mano: elegir a otra persona no lo pisa
       if (IDS_DECLARACION.includes(id)) invalidarFirmas();
       tocarEntrega();
       pintarDeclaracion();
     }));
+    // Nombre de una persona de la base (escrito completo o elegido de la lista): se llenan su RUT, cargo y correo
+    ['Entrega', 'Recibe'].forEach(pre => {
+      const el = document.getElementById(`e${pre}Nombre`);
+      el.addEventListener('input', () => {
+        if (!est.entrega) return;
+        const p = buscarPersona(el.value, true);
+        if (p) elegirPersona(pre, p, true);
+        else { soltarPersona(pre); pintarPersonasActa(); }
+      });
+      el.addEventListener('change', () => { const p = buscarPersona(el.value); if (p && est.entrega) elegirPersona(pre, p, true); });
+    });
+    $('#aNombre').addEventListener('change', () => {
+      const p = buscarPersona($('#aNombre').value);
+      if (!p) return;
+      $('#aNombre').value = p.nombre;
+      if (!$('#aRut').value.trim() && p.rut) $('#aRut').value = p.rut;
+      if (!$('#aCargo').value.trim() && p.cargo) $('#aCargo').value = p.cargo;
+    });
     ['eEntregaRut', 'eRecibeRut'].forEach(id => document.getElementById(id).addEventListener('blur', () => {
       pintarEstadoRut(id);
       pintarDeclaracion();
@@ -2364,7 +2930,11 @@
       pintarDeclaracion();
     });
     // La cola se envía sola: al volver a la app, al recuperar la señal y cada 45 s mientras quede algo pendiente
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') enviarCola(true); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') enviarCola(true);
+      else guardarPendientes();                 // Android puede cerrar la app al salir: lo escrito se guarda ya
+    });
+    window.addEventListener('pagehide', guardarPendientes);
     setInterval(async () => {
       let items = [];
       try { items = await Api.pendientes(); } catch (e) { return; }
@@ -2387,9 +2957,11 @@
     est.tarjetas = leerLocal('tarjetas') || {};
     est.huellasQr = leerLocal('huellasQr') || {};
     if (leerLocal('custodia')) pintarCustodia(leerLocal('custodia'));
+    usarRapido(leerLocal('rapido') || {}, true);
     prepararInstalacion();
     enlazar();
     await restaurarSesion();
+    const etapa = await leerEtapa();               // antes de mostrar el inicio, que la borra
     mostrar('inicio');
     await vincularDesdeEnlace();
     cargarConfig();
@@ -2398,7 +2970,9 @@
 
     const q = new URLSearchParams(location.search);
     if (q.has('compartido')) await recibirCompartidos();
+    else if (q.get('accion') === 'escanear' && leerLocal('camaraNativa')) toast('Toca «Escanear documento» para abrir la cámara del teléfono', 5000);
     else if (q.get('accion') === 'escanear' && await descartarSiHay()) { nuevaCaptura(); abrirCamara(); }
+    else if (etapa) await retomarEtapa(etapa);
 
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
       const habiaControlador = !!navigator.serviceWorker.controller;

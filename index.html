@@ -38,6 +38,8 @@
       <symbol id="i-qr" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"/><path d="M14 14h2.5v2.5H14zM17.5 17.5H20V20h-2.5zM14 18.5v1.5M18.5 14H20"/></symbol>
       <symbol id="i-ubicacion" viewBox="0 0 24 24"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.4"/></symbol>
       <symbol id="i-firma" viewBox="0 0 24 24"><path d="M3 17c2.5-4 4.5-9 6.5-9 1.6 0 .2 6.5 2 6.5s2.6-4 4.3-4c1.2 0 .7 3 2.2 3H21"/><path d="M3 20.5h18"/></symbol>
+      <symbol id="i-telefono" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><circle cx="12" cy="9" r="2.6"/><path d="M10.5 18h3"/></symbol>
+      <symbol id="i-estrella" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.5 6 .8-4.4 4.1 1.1 5.9L12 17l-5.3 2.8 1.1-5.9L3.4 9.8l6-.8z"/></symbol>
       <symbol id="i-instalar" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 7v8M8.5 11.5L12 15l3.5-3.5"/></symbol>
     </defs>
   </svg>
@@ -153,6 +155,10 @@
         <span id="textoEdicion">Corrigiendo un registro: los cambios quedan en su bitácora.</span>
       </div>
       <div class="lectura" id="lectura" hidden></div>
+      <div class="frecuentes" id="grupoFrecuentes" hidden>
+        <span class="campo-etiqueta"><svg class="ico"><use href="#i-estrella"/></svg>Rendiciones frecuentes</span>
+        <div class="chips" id="chipsFrecuentes"></div>
+      </div>
       <div class="segmentado" id="segMovimiento" role="radiogroup" aria-label="Tipo de movimiento">
         <button type="button" role="radio" data-valor="Desembolso MP">Gasto MP</button>
         <button type="button" role="radio" data-valor="Ingreso caja chica">Ingreso</button>
@@ -187,7 +193,8 @@
           <label class="campo">Tipo de documento<select id="fTipo"></select></label>
           <label class="campo">N° documento<input id="fNumero" inputmode="numeric"></label>
         </div>
-        <label class="campo" id="campoProveedor">Proveedor<input id="fProveedor"></label>
+        <label class="campo" id="campoProveedor">Proveedor<input id="fProveedor" list="listaProveedores" autocomplete="off"></label>
+        <datalist id="listaProveedores"></datalist>
         <div class="campos-2">
           <label class="campo" id="campoRut">RUT proveedor<input id="fRut" placeholder="76.123.456-7"><small id="rutEstado"></small></label>
           <label class="campo">Medio de pago<select id="fMedio"></select></label>
@@ -197,7 +204,7 @@
 
         <details class="mas">
           <summary>Más datos</summary>
-          <label class="campo" id="campoRinde">Rinde<input id="fRinde"></label>
+          <label class="campo" id="campoRinde">Rinde<input id="fRinde" list="listaPersonas" autocomplete="off"></label>
           <label class="campo">Observaciones<textarea id="fObs" rows="2"></textarea></label>
         </details>
       </form>
@@ -218,6 +225,7 @@
         </div>
         <button class="btn btn-principal btn-grande" id="btnOtro"><svg class="ico"><use href="#i-camara"/></svg>Escanear otro</button>
         <button class="btn-texto" id="btnCorregirListo" hidden>¿Algo quedó mal? Corregir o deshacer</button>
+        <button class="btn-texto" id="btnFrecuente" hidden><svg class="ico"><use href="#i-estrella"/></svg> Guardar como rendición frecuente</button>
         <button class="btn-texto suave" data-ir="inicio">Volver al inicio</button>
       </div>
     </section>
@@ -257,7 +265,8 @@
       <h2 class="seccion">2 · Quién entrega y quién recibe</h2>
       <div class="persona">
         <span class="persona-titulo" id="tituloEntrega">Entrega</span>
-        <label class="campo">Nombre y apellido<input id="eEntregaNombre" maxlength="120" autocomplete="off"></label>
+        <div class="chips chips-personas" id="eEntregaPersonas"></div>
+        <label class="campo">Nombre y apellido<input id="eEntregaNombre" maxlength="120" list="listaPersonas" autocomplete="off"></label>
         <div class="campos-2">
           <label class="campo">RUT<input id="eEntregaRut" maxlength="14" placeholder="12.345.678-9" autocomplete="off"><small id="eEntregaRutEstado"></small></label>
           <label class="campo">Cargo<input id="eEntregaCargo" maxlength="120" autocomplete="off"></label>
@@ -265,13 +274,16 @@
       </div>
       <div class="persona">
         <span class="persona-titulo" id="tituloRecibe">Recibe</span>
-        <label class="campo">Nombre y apellido<input id="eRecibeNombre" maxlength="120" autocomplete="off"></label>
+        <div class="chips chips-personas" id="eRecibePersonas"></div>
+        <label class="campo">Nombre y apellido<input id="eRecibeNombre" maxlength="120" list="listaPersonas" autocomplete="off"></label>
         <div class="campos-2">
           <label class="campo">RUT<input id="eRecibeRut" maxlength="14" placeholder="12.345.678-9" autocomplete="off"><small id="eRecibeRutEstado"></small></label>
           <label class="campo">Cargo o área<input id="eRecibeCargo" maxlength="120" autocomplete="off"></label>
         </div>
         <label class="campo">Correo (opcional)<input id="eRecibeCorreo" type="email" inputmode="email" maxlength="120" autocomplete="off"></label>
       </div>
+
+      <datalist id="listaPersonas"></datalist>
 
       <h2 class="seccion">3 · Lugar, momento y condiciones</h2>
       <div class="control info" id="eUbicacion"><svg class="ico"><use href="#i-ubicacion"/></svg><span id="eUbicacionTexto">Buscando la ubicación…</span><button type="button" class="btn-texto" id="btnReubicar" hidden>Reintentar</button></div>
@@ -327,7 +339,7 @@
       <label class="campo">Dirección del servidor<input id="aUrl" type="url" placeholder="https://script.google.com/macros/s/…/exec"></label>
       <label class="campo">Clave de acceso<input id="aToken" type="password"></label>
       <h2 class="seccion">Quién rinde</h2>
-      <label class="campo">Nombre<input id="aNombre" placeholder="Nombre y apellido"></label>
+      <label class="campo">Nombre<input id="aNombre" placeholder="Nombre y apellido" list="listaPersonas" autocomplete="off"></label>
       <div class="campos-2">
         <label class="campo">RUT<input id="aRut" placeholder="12.345.678-9"></label>
         <label class="campo">Cargo<input id="aCargo" placeholder="Ej: Administración y Finanzas"></label>
@@ -338,6 +350,13 @@
         <label class="campo">Tarjeta Mercado Pago<input id="aTarjetaMP" inputmode="numeric" maxlength="4" placeholder="Últimos 4"></label>
         <label class="campo">Tarjeta Santander<input id="aTarjetaSan" inputmode="numeric" maxlength="4" placeholder="Opcional"></label>
       </div>
+      <h2 class="seccion">Cámara</h2>
+      <label class="interruptor">
+        <input type="checkbox" id="aCamaraNativa">
+        <span class="interruptor-pista"></span>
+        <span>Usar siempre la cámara del teléfono (una foto a la vez)</span>
+      </label>
+      <p class="ayuda">Si no, la app espera a que el teléfono esté quieto y guarda la foto más nítida. Tocar la imagen enfoca ese punto.</p>
       <button class="btn btn-principal" id="btnGuardarAjustes">Guardar ajustes</button>
       <button class="btn btn-secundario" id="btnProbar">Probar conexión</button>
       <p class="estado-conexion" id="estadoConexion"></p>
@@ -352,8 +371,12 @@
     <div class="camara-arriba">
       <button class="boton-claro" id="btnCerrarCamara" aria-label="Cerrar"><svg class="ico"><use href="#i-cerrar"/></svg></button>
       <span class="camara-ayuda" id="camaraAyuda">Encuadra el documento completo</span>
-      <button class="boton-claro" id="btnFlash" aria-label="Linterna" hidden><svg class="ico"><use href="#i-linterna"/></svg></button>
+      <div class="camara-botones">
+        <button class="boton-claro" id="btnCamaraTelefono" aria-label="Usar la cámara del teléfono"><svg class="ico"><use href="#i-telefono"/></svg></button>
+        <button class="boton-claro" id="btnFlash" aria-label="Linterna" hidden><svg class="ico"><use href="#i-linterna"/></svg></button>
+      </div>
     </div>
+    <div class="anillo-foco" id="anilloFoco" aria-hidden="true"></div>
     <div class="camara-modos" role="radiogroup" aria-label="Tipo de documento">
       <button type="button" role="radio" data-modo="documento" aria-checked="true">Documento</button>
       <button type="button" role="radio" data-modo="tramos" aria-checked="false">Boleta larga</button>
@@ -438,6 +461,7 @@
   <script src="js/db.js"></script>
   <script src="js/escaner.js"></script>
   <script src="js/pdf.js"></script>
+  <script src="js/estabilizador.js"></script>
   <script src="js/custodia.js"></script>
   <script src="js/api.js"></script>
   <script src="js/app.js"></script>

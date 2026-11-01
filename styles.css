@@ -231,7 +231,7 @@ main { max-width: 560px; margin: 0 auto; }
 .campo textarea { resize: vertical; min-height: 64px; }
 .campo select { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--suave) 50%), linear-gradient(135deg, var(--suave) 50%, transparent 50%); background-position: calc(100% - 18px) 21px, calc(100% - 13px) 21px; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 30px; }
 .campo input:focus, .campo select:focus, .campo textarea:focus { border-color: var(--dorado); box-shadow: 0 0 0 3px rgba(201, 154, 63, .22); }
-.campo input.sugerido, .campo select.sugerido { border-left: 4px solid var(--dorado); }
+.campo input.sugerido, .campo select.sugerido, .campo textarea.sugerido { border-left: 4px solid var(--dorado); }
 .campo input.invalido, .campo textarea.invalido { border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(179, 38, 30, .12); }
 .campo small { font-weight: 500; font-size: 12px; min-height: 0; }
 .campo small.ok { color: var(--verde); }
@@ -248,6 +248,14 @@ main { max-width: 560px; margin: 0 auto; }
 }
 .chips button[aria-pressed="true"] { background: var(--oscuro); border-color: var(--oscuro); color: var(--dorado); font-weight: 600; }
 .chips.invalido button { border-color: var(--rojo); }
+.chips button.sugerida { border-color: var(--dorado); box-shadow: 0 0 0 2px rgba(201, 154, 63, .35); }
+.chips button.mas { color: var(--dorado-texto); border-style: dashed; }
+.frecuentes { margin-bottom: 14px; }
+.frecuentes .campo-etiqueta { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--suave); margin-bottom: 8px; }
+.frecuentes .ico, .btn-texto .ico { width: 16px; height: 16px; color: var(--dorado-texto); vertical-align: -3px; }
+.chips-personas { margin-bottom: 10px; }
+.chips-personas:empty { display: none; }
+.chips-personas button { padding: 6px 11px; font-size: 13.5px; }
 
 .nota { font-size: 13.5px; padding: 8px 12px; border-radius: 10px; margin: -4px 0 12px; display: flex; align-items: center; gap: 8px; }
 .nota span { flex: 1; }
@@ -295,7 +303,15 @@ main { max-width: 560px; margin: 0 auto; }
   position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between;
   padding: calc(12px + env(safe-area-inset-top, 0px)) 12px 12px; background: linear-gradient(rgba(0, 0, 0, .55), transparent);
 }
-.camara-ayuda { font-size: 14px; text-shadow: 0 1px 3px rgba(0, 0, 0, .6); }
+.camara-ayuda { font-size: 14px; text-shadow: 0 1px 3px rgba(0, 0, 0, .6); text-align: center; padding: 0 8px; }
+.camara-ayuda.aviso { color: var(--dorado-claro); font-weight: 650; }
+.camara-botones { display: flex; gap: 8px; }
+#btnFlash.sugerido { box-shadow: 0 0 0 3px var(--dorado); animation: latido .9s ease-in-out infinite alternate; }
+@keyframes latido { to { box-shadow: 0 0 0 6px rgba(201, 154, 63, .35); } }
+.anillo-foco { position: absolute; left: 0; top: 0; width: 72px; height: 72px; margin: -36px 0 0 -36px; border: 2px solid var(--dorado); border-radius: 50%; opacity: 0; pointer-events: none; }
+.anillo-foco.activo { animation: foco .9s ease-out; }
+@keyframes foco { 0% { opacity: 1; transform: scale(1.4); } 30% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1); } }
+.foto-simple .camara-modos, .foto-simple .contador, .foto-simple .btn-listo, .foto-simple .marco { visibility: hidden; }
 .boton-claro { width: 44px; height: 44px; border-radius: 50%; border: 0; background: rgba(0, 0, 0, .35); color: #fff; display: grid; place-items: center; }
 .boton-claro.activo { background: var(--dorado); color: var(--oscuro); }
 .camara-abajo {
@@ -305,6 +321,9 @@ main { max-width: 560px; margin: 0 auto; }
 .disparador { width: 74px; height: 74px; border-radius: 50%; border: 5px solid var(--dorado); background: #fff; box-shadow: 0 0 0 3px rgba(0, 0, 0, .25); }
 .disparador:active { transform: scale(.94); }
 .disparador.ocupado { background: #ddd; animation: pulso .8s ease-in-out infinite alternate; }
+/* Anillo del botón: gris si el teléfono se mueve, dorado con halo cuando está quieto (giroscopio) */
+.disparador.movido { border-color: #8d96a0; }
+.disparador.quieto { border-color: var(--dorado); box-shadow: 0 0 0 3px rgba(0, 0, 0, .25), 0 0 0 9px rgba(201, 154, 63, .45); }
 @keyframes pulso { to { background: #fff; } }
 .contador { justify-self: start; position: relative; width: 52px; height: 52px; border-radius: 10px; border: 2px solid #fff; background: rgba(255, 255, 255, .15); padding: 0; overflow: visible; }
 .contador img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; }

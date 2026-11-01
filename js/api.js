@@ -150,6 +150,19 @@ const Demo = (() => {
       { codigo: 'ADMTVA-GASVAR-GASCOM', significado: 'Gastos comerciales variables' },
       { codigo: 'nRC-INT-SAT', significado: 'Internet satelital no recurrente' }]
   };
+  // Personas y rendiciones frecuentes ficticias (la app publicada no lleva datos reales)
+  const personas = [
+    { nombre: 'Ana María Demo Ejemplo', rut: '11.111.111-1', cargo: 'Técnica de terreno', area: 'Operaciones', correo: 'ana.demo@ejemplo.cl' },
+    { nombre: 'Pedro Pablo Prueba Ficticio', rut: '22.222.222-2', cargo: 'Jefe de proyectos', area: 'Operaciones', correo: '' },
+    { nombre: 'Rosa Muestra', rut: '', cargo: 'Servicios generales', area: 'Administración', correo: '' }
+  ];
+  let plantillas = [
+    { nombre: 'Desayuno equipo', movimiento: 'Desembolso MP', categoria: 'Alimentación equipo', ceco: 'ADMVTA-GASVAR-GASADM',
+      detalle: 'Desayuno del equipo en la oficina', proveedor: '', rut: '', tipoDoc: 'Factura electrónica', medio: 'Tarjeta MP', rinde: 'Rosa Muestra', monto: 28000 },
+    { nombre: 'Ferretería terreno', movimiento: 'Desembolso MP', categoria: 'Materiales y ferretería', ceco: '',
+      detalle: 'Insumos de ferretería para terreno', proveedor: 'Ferretería El Maestro Ltda.', rut: '', tipoDoc: 'Boleta electrónica', medio: 'Tarjeta MP', rinde: 'Pedro Pablo Prueba Ficticio', monto: 13600 }
+  ];
+  const proveedores = [{ nombre: 'COPEC S.A.', rut: '99.520.000-7', usos: 3, ultimo: '2026-10-27', categoria: 'Combustible', ceco: '' }];
   const base = { movimiento: 'Desembolso MP', tipoDoc: 'Boleta electrónica', rut: '', ceco: '', medio: 'Tarjeta MP', rinde: 'Demo', observaciones: '', conciliacion: '' };
   const ultimos = [
     Object.assign({}, base, { id: 'CC-2026-0006', fecha: '2026-10-27', proveedor: 'COPEC S.A.', numero: '45872310', rut: '99.520.000-7', monto: 25990,
@@ -173,7 +186,12 @@ const Demo = (() => {
     switch (accion) {
       case 'ping': return { ok: true, version: 'demo', cuenta: 'demo@telconsulting.cl' };
       case 'config': return { ok: true, listas, tarjetas: { mp: '****1234', santander: '' }, planillaUrl: '#', version: 'demo',
-        custodia: custodiaPublica(), huellasQr: Object.assign({}, huellas) };
+        custodia: custodiaPublica(), huellasQr: Object.assign({}, huellas), personas: personas.slice(), plantillas: plantillas.slice(), proveedores };
+      case 'guardarPlantillas': {
+        const nueva = datos.plantillas[0], clave = normal(nueva.nombre);
+        plantillas = plantillas.filter(p => normal(p.nombre) !== clave).concat([Object.assign({ monto: null }, nueva)]);
+        return { ok: true, agregadas: [nueva.nombre], actualizadas: [], avisos: [], plantillas: plantillas.slice() };
+      }
       case 'configurar': return { ok: true, tarjetas: { mp: '****' + (datos.tarjetaMP || '1234'), santander: '' } };
       case 'resumen': return {
         ok: true, saldo: 154510, planillaUrl: '#', ultimos: ultimos.slice(0, 5), custodia: custodiaPublica(), huellasQr: Object.assign({}, huellas),
