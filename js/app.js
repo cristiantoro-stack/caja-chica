@@ -1,6 +1,6 @@
 /* App Caja Chica · flujo: capturar → revisar páginas → datos del gasto → guardar en Drive y en la planilla. */
 (() => {
-  const VERSION = '1.5.0';
+  const VERSION = '1.5.1';
   const MAX_BYTES = 20 * 1048576;
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
@@ -463,7 +463,7 @@
     return {
       valores, categoria: est.categoria, movimiento: est.movimiento, tocados: Array.from(est.tocados), plantilla: est.plantilla,
       sugeridos: IDS_FORMULARIO.filter(id => document.getElementById(id).classList.contains('sugerido')), lectura: est.lectura,
-      provAplicado: est.provAplicado || null,
+      provAplicado: est.provAplicado || null, plantillaAplicada: est.plantillaAplicada || null,
       paginasClave: clavePaginas()
     };
   }
@@ -487,6 +487,7 @@
     est.tocados = new Set(f.tocados || []);
     est.plantilla = f.plantilla || null;
     est.provAplicado = f.provAplicado || null;
+    est.plantillaAplicada = f.plantillaAplicada || null;
     elegirMovimiento(est.movimiento);
     const v = f.valores || {};
     IDS_FORMULARIO.forEach(id => {
@@ -524,7 +525,7 @@
     est.paginas.forEach(liberar);
     Object.assign(est, { paginas: [], pdf: null, origen: null, capturadoEn: null, lectura: null, categoria: '', movimiento: 'Desembolso MP',
       tira: null, modoTira: 'auto', modoCamara: 'documento', plantilla: null, plantillaSugerida: null, verTodasPlantillas: false,
-      formularioGuardado: null, provAplicado: null });
+      formularioGuardado: null, provAplicado: null, plantillaAplicada: null });
     est.tocados = new Set();
     est.lecturaId++;
     $('#chkUnir').checked = false;
@@ -1435,7 +1436,7 @@
       b.type = 'button';
       b.textContent = c.nombre;
       b.setAttribute('aria-pressed', String(est.categoria === c.nombre));
-      b.onclick = () => elegirCategoria(c);
+      b.onclick = () => (est.categoria === c.nombre ? quitarCategoria(c) : elegirCategoria(c));
       cont.appendChild(b);
     });
     $('#grupoRepresentacion').hidden = !(GASTOS.includes(est.movimiento) && est.categoria === 'Atención a clientes');
@@ -1449,6 +1450,13 @@
       validarCeco();
     }
     pintarCategorias();
+  }
+
+  function quitarCategoria(c) {
+    est.categoria = '';
+    if (!est.tocados.has('ceco') && c.ceco && $('#fCeco').value === c.ceco) { $('#fCeco').value = ''; $('#fCeco').classList.remove('sugerido'); validarCeco(); }
+    pintarCategorias();
+    tocarFormulario();
   }
 
   function validarRut() {
@@ -1535,10 +1543,15 @@
 
   function aplicarSugeridos(r) {
     const s = r.sugeridos || {};
+    const delDocumento = el => {
+      const a = est.plantillaAplicada;
+      if (a && a.despues.v[el.id]) a.despues.v[el.id].valor = null;
+    };
     const poner = (campo, el, valor) => {
       if (valor === null || valor === undefined || valor === '' || est.tocados.has(campo)) return;
       el.value = valor;
       el.classList.add('sugerido');
+      delDocumento(el);
     };
     poner('fecha', $('#fFecha'), s.fecha);
     if (s.monto) poner('monto', $('#fMonto'), miles(s.monto));
@@ -1554,8 +1567,8 @@
     completarPorRut();
     if (!est.tocados.has('medio') && est.movimiento === 'Desembolso MP') {
       const t = r.tarjetas && r.tarjetas['Tarjeta MP'];
-      if (t && t.resultado === 'coincide') $('#fMedio').value = 'Tarjeta MP';
-      else if (r.mercadoPago && opciones('#fMedio').includes('QR Mercado Pago')) $('#fMedio').value = 'QR Mercado Pago';
+      if (t && t.resultado === 'coincide') { $('#fMedio').value = 'Tarjeta MP'; delDocumento($('#fMedio')); }
+      else if (r.mercadoPago && opciones('#fMedio').includes('QR Mercado Pago')) { $('#fMedio').value = 'QR Mercado Pago'; delDocumento($('#fMedio')); }
     }
     sugerirPorProveedor();
     tocarFormulario();
@@ -1684,7 +1697,8 @@
       est.ultimo = {
         id: r.id, paginas: est.paginas, pdf: est.pdf, origen: est.origen, capturadoEn: est.capturadoEn, lectura: est.lectura,
         tira: est.tira, modoTira: est.modoTira, unir: $('#chkUnir').checked, datos: d,
-        categoria: est.categoria, movimiento: est.movimiento, tocados: new Set(est.tocados), plantilla: est.plantilla
+        categoria: est.categoria, movimiento: est.movimiento, tocados: new Set(est.tocados), plantilla: est.plantilla,
+        plantillaAplicada: est.plantillaAplicada
       };
       contarUso('plantillas', est.plantilla);
       recordarProveedor(d);
@@ -2008,6 +2022,7 @@
     validarRut();
     validarCeco();
     est.plantilla = u.plantilla || null;
+    est.plantillaAplicada = u.plantillaAplicada || null;
     pintarPlantillas();
     if (est.lectura) { pintarLectura(est.lectura.sugeridos && est.lectura.sugeridos.fecha ? 'ok' : 'ok-sin-fecha'); pintarControlTarjeta(); revisarMonto(); }
     guardarFormulario();
@@ -2756,8 +2771,55 @@
    * Rendición frecuente: llena el contexto del gasto (categoría, CeCo, detalle, medio, quién rinde) y, si el documento no
    * los trajo, el proveedor y su RUT. El monto y la fecha salen siempre del documento. Lo escrito a mano no se pisa.
    */
+  /** Foto de los campos y elecciones del formulario: para deshacer una rendición frecuente si se desmarca. */
+  function fotoCampos() {
+    const v = {};
+    IDS_FORMULARIO.forEach(id => {
+      const el = document.getElementById(id);
+      v[id] = { valor: el.value, sugerido: el.classList.contains('sugerido'), placeholder: el.placeholder || '' };
+    });
+    return { v, categoria: est.categoria, movimiento: est.movimiento };
+  }
+
+  /**
+   * Desmarca la rendición frecuente: vuelve a como estaba lo que ella llenó y nadie cambió después (lo escrito a mano después
+   * se respeta). Queda sin rendición frecuente: el gasto no es recurrente.
+   */
+  function quitarPlantilla(silencioso) {
+    const a = est.plantillaAplicada;
+    est.plantilla = null;
+    est.plantillaAplicada = null;
+    if (a) {
+      const ahora = fotoCampos();                // antes de elegirMovimiento, que reescribe medio, tipo y categoría
+      if (est.movimiento === a.despues.movimiento && a.antes.movimiento !== a.despues.movimiento) elegirMovimiento(a.antes.movimiento);
+      IDS_FORMULARIO.forEach(id => {
+        const el = document.getElementById(id), d = a.despues.v[id], b = a.antes.v[id], n = ahora.v[id];
+        if (!d || !b) return;
+        // Vuelve al valor de antes solo lo que sigue como lo dejó la plantilla y nadie escribió; el resto queda como estaba
+        const dePlantilla = n.valor === d.valor && d.valor !== b.valor && !(CAMPOS[id] && est.tocados.has(CAMPOS[id]));
+        const valor = dePlantilla ? b.valor : n.valor;
+        if (el.value !== valor && !(el.tagName === 'SELECT' && valor && !opciones('#' + id).includes(valor))) el.value = valor;
+        if (dePlantilla) el.classList.toggle('sugerido', b.sugerido);
+        if (n.placeholder === d.placeholder && d.placeholder !== b.placeholder) el.placeholder = b.placeholder;
+      });
+      est.categoria = ahora.categoria === a.despues.categoria && a.antes.categoria !== a.despues.categoria ? a.antes.categoria : ahora.categoria;
+      pintarCategorias();
+      validarRut();
+      validarCeco();
+      completarPorRut();
+      pintarControlTarjeta();
+    }
+    pintarPlantillas();
+    tocarFormulario();
+    if (!silencioso) toast('Sin rendición frecuente');
+  }
+
   function aplicarPlantilla(p) {
     if (est.edicion) return;
+    // Tocar la que ya está marcada la desmarca; si había otra, primero se deshace esa (no se mezclan)
+    if (est.plantilla === p.nombre) { quitarPlantilla(); return; }
+    if (est.plantilla) quitarPlantilla(true);
+    const antes = fotoCampos();
     const poner = (sel, v, campo) => {
       const el = $(sel);
       if (!v || (campo && est.tocados.has(campo))) return;
@@ -2786,10 +2848,11 @@
     completarPorRut();
     if (p.rinde) $('#fRinde').value = p.rinde;
     if (p.monto && !$('#fMonto').value) $('#fMonto').placeholder = `Típico ${clp(p.monto)}`;
+    est.plantillaAplicada = { nombre: p.nombre, antes, despues: fotoCampos() };
     pintarControlTarjeta();
     pintarPlantillas();
     tocarFormulario();
-    toast(`«${p.nombre}»: revisa el monto y la fecha del documento`);
+    toast(`«${p.nombre}»: revisa el monto y la fecha. Tócala de nuevo para quitarla`);
   }
 
   const cuerpoRut = s => { const r = rutInfo(s); return r && r.ok ? r.texto.replace(/\./g, '').split('-')[0] : ''; };
