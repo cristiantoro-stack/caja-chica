@@ -1,6 +1,6 @@
 /* App Caja Chica · flujo: capturar → revisar páginas → datos del gasto → guardar en Drive y en la planilla. */
 (() => {
-  const VERSION = '1.3.1';
+  const VERSION = '1.4.0';
   const MAX_BYTES = 20 * 1048576;
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
@@ -8,7 +8,8 @@
   const TITULOS = { inicio: 'Caja Chica', paginas: 'Páginas del documento', datos: 'Datos del gasto', listo: 'Resultado', ajustes: 'Ajustes', registro: 'Registro',
     entrega: 'Entrega de tarjeta', acta: 'Acta de la tarjeta' };
   const GASTOS = ['Desembolso MP', 'Rendición Santander'];
-  const CAMPOS = { fFecha: 'fecha', fMonto: 'monto', fTipo: 'tipoDoc', fNumero: 'numero', fProveedor: 'proveedor', fRut: 'rut', fMedio: 'medio', fCeco: 'ceco', fDetalle: 'detalle' };
+  const CAMPOS = { fFecha: 'fecha', fMonto: 'monto', fTipo: 'tipoDoc', fNumero: 'numero', fProveedor: 'proveedor', fRazon: 'razonSocial', fRut: 'rut',
+    fMedio: 'medio', fCeco: 'ceco', fDetalle: 'detalle' };
   const URL_SERVIDOR = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+|macros)\/s\/[\w-]+\/exec$/;
   const PREFIJO = Api.demo ? 'cc-demo.' : 'cc.';
 
@@ -453,6 +454,7 @@
     return {
       valores, categoria: est.categoria, movimiento: est.movimiento, tocados: Array.from(est.tocados), plantilla: est.plantilla,
       sugeridos: IDS_FORMULARIO.filter(id => document.getElementById(id).classList.contains('sugerido')), lectura: est.lectura,
+      provAplicado: est.provAplicado || null,
       paginasClave: clavePaginas()
     };
   }
@@ -475,6 +477,7 @@
     est.movimiento = f.movimiento || 'Desembolso MP';
     est.tocados = new Set(f.tocados || []);
     est.plantilla = f.plantilla || null;
+    est.provAplicado = f.provAplicado || null;
     elegirMovimiento(est.movimiento);
     const v = f.valores || {};
     IDS_FORMULARIO.forEach(id => {
@@ -512,7 +515,7 @@
     est.paginas.forEach(liberar);
     Object.assign(est, { paginas: [], pdf: null, origen: null, capturadoEn: null, lectura: null, categoria: '', movimiento: 'Desembolso MP',
       tira: null, modoTira: 'auto', modoCamara: 'documento', plantilla: null, plantillaSugerida: null, verTodasPlantillas: false,
-      formularioGuardado: null });
+      formularioGuardado: null, provAplicado: null });
     est.tocados = new Set();
     est.lecturaId++;
     $('#chkUnir').checked = false;
@@ -1148,13 +1151,14 @@
   }
 
   function limpiarFormulario() {
-    ['fFecha', 'fMonto', 'fNumero', 'fProveedor', 'fRut', 'fCeco', 'fDetalle', 'fObs', 'fEmpresa', 'fAsistentes', 'fMotivo']
+    ['fFecha', 'fMonto', 'fNumero', 'fProveedor', 'fRazon', 'fRut', 'fCeco', 'fDetalle', 'fObs', 'fEmpresa', 'fAsistentes', 'fMotivo']
       .forEach(id => { document.getElementById(id).value = ''; });
     $$('.sugerido, .invalido').forEach(el => el.classList.remove('sugerido', 'invalido'));
     $('#fRinde').value = Api.config().nombre || '';
     $('#fMonto').placeholder = '$0';
     ['#lectura', '#sugMonto', '#controlTarjeta', '#grupoRepresentacion'].forEach(s => { $(s).hidden = true; });
     $('#rutEstado').textContent = '';
+    $('#provEstado').textContent = '';
     $('#cecoEstado').textContent = '';
   }
 
@@ -1312,8 +1316,13 @@
     if (s.tipoDoc && opciones('#fTipo').includes(s.tipoDoc)) poner('tipoDoc', $('#fTipo'), s.tipoDoc);
     poner('numero', $('#fNumero'), s.numero);
     poner('proveedor', $('#fProveedor'), s.proveedor);
+    poner('razonSocial', $('#fRazon'), s.razonSocial);
     poner('rut', $('#fRut'), s.rut);
+    if (s.proveedorConocido && s.rut && !proveedorDeRut(cuerpoRut(s.rut))) {
+      est.proveedores.push({ rut: s.rut, razonSocial: s.razonSocial || '', fantasia: s.proveedor || '', categoria: '', ceco: '', usos: 0, ultimo: '' });
+    }
     validarRut();
+    completarPorRut();
     if (!est.tocados.has('medio') && est.movimiento === 'Desembolso MP') {
       const t = r.tarjetas && r.tarjetas['Tarjeta MP'];
       if (t && t.resultado === 'coincide') $('#fMedio').value = 'Tarjeta MP';
@@ -1360,6 +1369,7 @@
       tipoDoc: $('#fTipo').value,
       numero: $('#fNumero').value.trim(),
       proveedor: $('#fProveedor').value.trim(),
+      razonSocial: $('#fRazon').value.trim(),
       rut: $('#fRut').value.trim(),
       detalle: $('#fDetalle').value.trim(),
       categoria: gasto ? est.categoria : 'Recarga caja chica',
@@ -1434,7 +1444,8 @@
         archivo: { b64: await aBase64(archivo.blob), paginas: archivo.paginas, nombreOriginal: archivo.nombreOriginal },
         ocr: est.lectura ? { texto: est.lectura.texto, firma: est.lectura.firma } : null,
         meta: { capturadoEn: est.capturadoEn, origen: est.origen, dispositivo: navigator.userAgent, versionApp: VERSION,
-          capturas: est.pdf ? null : est.paginas.map(p => p.captura || null), plantilla: est.plantilla || null },
+          capturas: est.pdf ? null : est.paginas.map(p => p.captura || null), plantilla: est.plantilla || null,
+          nombresEscritos: { proveedor: est.tocados.has('proveedor'), razonSocial: est.tocados.has('razonSocial') } },
         forzar: !!forzar
       };
       if (!Api.configurada()) throw new Api.ErrorApi('La app aún no está vinculada', 'config');
@@ -1447,6 +1458,7 @@
         categoria: est.categoria, movimiento: est.movimiento, tocados: new Set(est.tocados), plantilla: est.plantilla
       };
       contarUso('plantillas', est.plantilla);
+      recordarProveedor(d);
       await terminarSesion(true);
       mostrarListo(r, d, null);
     } catch (e) {
@@ -1460,6 +1472,7 @@
       } else if ((e.codigo === 'red' || e.codigo === 'config') && payload) {
         await Api.encolar(payload);
         contarUso('plantillas', est.plantilla);
+        recordarProveedor(d);
         await terminarSesion();
         mostrarListo(null, d, e.codigo);
       } else {
@@ -1558,7 +1571,8 @@
     $('#rgEstado').textContent = f.estado || '';
     $('#rgEstado').className = 'chip ' + claseEstado(f.estado);
     $('#rgMonto').textContent = clp(f.monto);
-    $('#rgProveedor').textContent = f.proveedor || f.detalle || f.movimiento || '';
+    $('#rgProveedor').textContent = [f.proveedor || f.detalle || f.movimiento || '', f.razonSocial && f.razonSocial !== f.proveedor ? f.razonSocial : '']
+      .filter(Boolean).join(' · ');
     const filas = [
       ['Fecha', fechaCorta(f.fecha)], ['Documento', [f.tipoDoc, f.numero].filter(Boolean).join(' N° ')], ['RUT', f.rut],
       ['Detalle', f.detalle], ['Categoría', f.categoria], ['CeCo', f.ceco], ['Medio de pago', f.medio],
@@ -1585,7 +1599,7 @@
     $('#rgAvisoTexto').textContent = aviso;
   }
 
-  const IDS_FORMULARIO = ['fFecha', 'fMonto', 'fTipo', 'fNumero', 'fProveedor', 'fRut', 'fMedio', 'fCeco', 'fDetalle', 'fRinde', 'fObs',
+  const IDS_FORMULARIO = ['fFecha', 'fMonto', 'fTipo', 'fNumero', 'fProveedor', 'fRazon', 'fRut', 'fMedio', 'fCeco', 'fDetalle', 'fRinde', 'fObs',
     'fEmpresa', 'fAsistentes', 'fMotivo'];
 
   /** Copia del formulario de la captura en curso: la corrección usa el mismo formulario y al salir se devuelve tal cual. */
@@ -1603,6 +1617,7 @@
     ponerCeco(d.ceco);
     const rep = representacion || {};
     [['fFecha', d.fecha], ['fMonto', d.monto ? miles(d.monto) : ''], ['fTipo', d.tipoDoc], ['fNumero', d.numero], ['fProveedor', d.proveedor],
+      ['fRazon', d.razonSocial],
       ['fRut', d.rut], ['fMedio', d.medio], ['fCeco', d.ceco], ['fDetalle', d.detalle], ['fRinde', d.rinde], ['fObs', d.observaciones],
       ['fEmpresa', rep.empresa], ['fAsistentes', rep.asistentes], ['fMotivo', rep.motivo]].forEach(([id, v]) => poner(id, v));
     est.categoria = d.categoria || '';
@@ -1623,6 +1638,7 @@
     validarCeco();
     ['#lectura', '#sugMonto', '#controlTarjeta', '#campoRinde', '#grupoFrecuentes'].forEach(s => { $(s).hidden = true; });
     $('#segMovimiento').classList.add('bloqueado');
+    $('#provEstado').textContent = '';
     $('#avisoEdicion').hidden = false;
     $('#textoEdicion').textContent = f.estado === 'Pendiente revisión' || f.estado === 'Observado'
       ? 'Corrige lo que necesites. El tipo de movimiento no se cambia: si está mal, deshaz el registro.'
@@ -1656,7 +1672,7 @@
     const o = est.edicion.original, c = {};
     const texto = v => String(v === undefined || v === null ? '' : v).replace(/\s+/g, ' ').trim();
     // En un ingreso no se ven categoría ni CeCo: no se tocan (A&F pudo haberlos completado)
-    const campos = ['fecha', 'monto', 'tipoDoc', 'numero', 'proveedor', 'rut', 'detalle', 'medio', 'observaciones']
+    const campos = ['fecha', 'monto', 'tipoDoc', 'numero', 'proveedor', 'razonSocial', 'rut', 'detalle', 'medio', 'observaciones']
       .concat(GASTOS.includes(d.movimiento) ? ['categoria', 'ceco'] : []);
     campos.forEach(k => { if (texto(d[k]) !== texto(o[k])) c[k] = d[k]; });
     const rep = x => (x && (x.empresa || x.asistentes || x.motivo) ? [x.empresa, x.asistentes, x.motivo].map(texto).join('|') : '');
@@ -2381,7 +2397,10 @@
   function usarRapido(r, local) {
     if (Array.isArray(r.personas)) est.personas = r.personas.filter(p => p && p.nombre);
     if (Array.isArray(r.plantillas)) est.plantillas = r.plantillas.filter(p => p && p.nombre);
-    if (Array.isArray(r.proveedores)) est.proveedores = r.proveedores.filter(p => p && p.nombre);
+    if (Array.isArray(r.proveedores)) {
+      est.proveedores = r.proveedores.filter(p => p && (p.fantasia || p.nombre || p.razonSocial))
+        .map(p => Object.assign({}, p, { fantasia: p.fantasia || p.nombre || '', razonSocial: p.razonSocial || '' }));
+    }
     if (!local) guardarLocal('rapido', { personas: est.personas, plantillas: est.plantillas, proveedores: est.proveedores });
     if (est.vista === 'datos') pintarPlantillas();
     if (est.vista === 'entrega') pintarPersonasActa();
@@ -2535,6 +2554,7 @@
     if (!$('#fTipo').classList.contains('sugerido')) poner('#fTipo', p.tipoDoc, 'tipoDoc');
     if (!$('#fProveedor').value.trim()) poner('#fProveedor', p.proveedor, 'proveedor');
     if (!$('#fRut').value.trim()) { poner('#fRut', p.rut, 'rut'); validarRut(); }
+    completarPorRut();
     if (p.rinde) $('#fRinde').value = p.rinde;
     if (p.monto && !$('#fMonto').value) $('#fMonto').placeholder = `Típico ${clp(p.monto)}`;
     pintarControlTarjeta();
@@ -2549,17 +2569,98 @@
   function sugerirPorProveedor() {
     if (est.edicion) return;
     const rut = cuerpoRut($('#fRut').value), nombre = normalNombre($('#fProveedor').value);
-    const prov = est.proveedores.find(p => (rut && cuerpoRut(p.rut) === rut) || (nombre && normalNombre(p.nombre) === nombre));
+    const prov = est.proveedores.find(p => (rut && cuerpoRut(p.rut) === rut)
+      || (nombre && (normalNombre(p.fantasia) === nombre || normalNombre(p.razonSocial) === nombre)));
     const plantilla = est.plantillas.find(p => (rut && p.rut && cuerpoRut(p.rut) === rut) || (nombre && p.proveedor && normalNombre(p.proveedor) === nombre));
     const sugerida = plantilla ? plantilla.nombre : null;
     if (sugerida !== est.plantillaSugerida) { est.plantillaSugerida = sugerida; pintarPlantillas(); }
     if (!prov) return;
-    if (!$('#fRut').value.trim() && prov.rut && !est.tocados.has('rut')) { $('#fRut').value = prov.rut; $('#fRut').classList.add('sugerido'); validarRut(); }
+    if (!$('#fRut').value.trim() && prov.rut && !est.tocados.has('rut')) { $('#fRut').value = prov.rut; $('#fRut').classList.add('sugerido'); validarRut(); completarPorRut(); }
     if (!est.plantilla && !est.categoria && prov.categoria && GASTOS.includes(est.movimiento)) {
       const cat = listas().categorias.find(c => c.nombre === prov.categoria);
       if (cat) elegirCategoria(cat);
       if (prov.ceco && !est.tocados.has('ceco')) { ponerCeco(prov.ceco); $('#fCeco').classList.add('sugerido'); validarCeco(); }
     }
+  }
+
+  /** Lo recién guardado queda en la lista del teléfono: el próximo documento del mismo RUT sale completo sin esperar al servidor. */
+  function recordarProveedor(d) {
+    const c = cuerpoRut(d.rut);
+    if (!c || !GASTOS.includes(d.movimiento)) return;
+    est.rutSinDatos = (est.rutSinDatos || []).filter(x => x !== c);
+    const p = proveedorDeRut(c);
+    if (p) {
+      if (!p.razonSocial && d.razonSocial) p.razonSocial = d.razonSocial;
+      if (!p.fantasia && d.proveedor) p.fantasia = d.proveedor;
+    } else if (d.razonSocial || d.proveedor) {
+      est.proveedores.push({ rut: d.rut, razonSocial: d.razonSocial || '', fantasia: d.proveedor || '', categoria: d.categoria || '', ceco: d.ceco || '',
+        usos: 1, ultimo: d.fecha });
+    }
+    usarRapido({});
+  }
+
+  /** El proveedor de un RUT en la lista del teléfono (cuerpo sin dígito verificador) o null. */
+  const proveedorDeRut = cuerpo => (cuerpo ? est.proveedores.find(p => cuerpoRut(p.rut) === cuerpo) || null : null);
+
+  /** Pone los nombres del proveedor conocido: reemplaza lo sugerido por el lector, nunca lo escrito a mano. */
+  function aplicarProveedor(p) {
+    const poner = (sel, campo, v) => {
+      const el = $(sel);
+      if (!v || est.tocados.has(campo) || el.value === v) return;
+      el.value = v;
+      el.classList.add('sugerido');
+      el.classList.remove('invalido');
+    };
+    poner('#fRazon', 'razonSocial', p.razonSocial);
+    poner('#fProveedor', 'proveedor', p.fantasia || p.razonSocial);
+    est.provAplicado = { rut: cuerpoRut(p.rut), razon: $('#fRazon').value, fantasia: $('#fProveedor').value };
+    pintarEstadoProveedor('conocido', p);
+  }
+
+  /** Cambió el RUT a uno sin datos: los nombres que se habían puesto solos con el RUT anterior ya no corresponden. */
+  function soltarProveedor(rut) {
+    const a = est.provAplicado;
+    if (!a || a.rut === rut) return;
+    [['#fRazon', 'razonSocial', a.razon], ['#fProveedor', 'proveedor', a.fantasia]].forEach(([sel, campo, v]) => {
+      const el = $(sel);
+      if (!est.tocados.has(campo) && v && el.value === v) { el.value = ''; el.classList.remove('sugerido'); }
+    });
+    est.provAplicado = null;
+  }
+
+  function pintarEstadoProveedor(estado, p) {
+    const el = $('#provEstado');
+    el.className = estado === 'conocido' ? 'ok' : estado === 'nuevo' ? 'aviso' : '';
+    el.textContent = estado === 'conocido' ? `Proveedor conocido${p && p.fuente ? ' · ' + p.fuente : ''}`
+      : estado === 'buscando' ? 'Buscando el proveedor por su RUT…'
+        : estado === 'nuevo' ? 'Proveedor nuevo: escribe sus nombres y la próxima vez saldrán solos' : '';
+  }
+
+  /**
+   * Con un RUT válido, los nombres salen solos: primero de la lista del teléfono (base de proveedores, fuentes de A&F y lo ya
+   * registrado) y, si no está, se le pregunta al servidor. Si nadie lo conoce, se escriben a mano una vez y quedan aprendidos.
+   */
+  function completarPorRut() {
+    const rut = cuerpoRut($('#fRut').value);
+    if (!rut) { soltarProveedor(''); pintarEstadoProveedor(''); return; }
+    const local = proveedorDeRut(rut);
+    if (local) { aplicarProveedor(local); return; }
+    soltarProveedor(rut);
+    if (!Api.demo && (!Api.configurada() || !navigator.onLine)) { pintarEstadoProveedor('nuevo'); return; }
+    if (est.rutConsultado === rut) return;
+    if ((est.rutSinDatos || []).includes(rut)) { pintarEstadoProveedor('nuevo'); return; }
+    est.rutConsultado = rut;
+    pintarEstadoProveedor('buscando');
+    Api.llamar('proveedor', { rut: $('#fRut').value }).then(r => {
+      if (cuerpoRut($('#fRut').value) !== rut) return;
+      const p = r && r.proveedor;
+      if (!p) { est.rutSinDatos = (est.rutSinDatos || []).concat([rut]); pintarEstadoProveedor('nuevo'); return; }
+      const nuevo = { rut: p.rut, razonSocial: p.razonSocial || '', fantasia: p.fantasia || '', categoria: p.categoria || '', ceco: p.ceco || '',
+        usos: 0, ultimo: '', fuente: p.fuente || '' };
+      est.proveedores.push(nuevo);
+      aplicarProveedor(nuevo);
+    }).catch(() => { if (cuerpoRut($('#fRut').value) === rut) pintarEstadoProveedor('nuevo'); })
+      .finally(() => { if (est.rutConsultado === rut) est.rutConsultado = null; });
   }
 
   /** Después de guardar: deja este gasto como rendición frecuente (un botón en "Datos del gasto"). */
@@ -2869,7 +2970,7 @@
       e.target.value = d ? miles(Number(d)) : '';
       revisarMonto();
     });
-    $('#fRut').addEventListener('blur', () => { validarRut(); sugerirPorProveedor(); });
+    $('#fRut').addEventListener('blur', () => { validarRut(); completarPorRut(); sugerirPorProveedor(); });
     $('#fProveedor').addEventListener('change', sugerirPorProveedor);
     // Lo escrito en "Datos del gasto" se guarda en el teléfono mientras se llena
     ['input', 'change', 'click'].forEach(t => $('#v-datos').addEventListener(t, tocarFormulario));

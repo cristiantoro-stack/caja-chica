@@ -236,6 +236,7 @@ main { max-width: 560px; margin: 0 auto; }
 .campo small { font-weight: 500; font-size: 12px; min-height: 0; }
 .campo small.ok { color: var(--verde); }
 .campo small.alerta { color: var(--rojo); }
+.campo small.aviso { color: var(--ambar); }
 .campo label { font: inherit; color: inherit; }
 .con-boton { display: flex; gap: 8px; }
 .con-boton input { flex: 1; min-width: 0; }

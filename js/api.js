@@ -162,7 +162,10 @@ const Demo = (() => {
     { nombre: 'Ferretería terreno', movimiento: 'Desembolso MP', categoria: 'Materiales y ferretería', ceco: '',
       detalle: 'Insumos de ferretería para terreno', proveedor: 'Ferretería El Maestro Ltda.', rut: '', tipoDoc: 'Boleta electrónica', medio: 'Tarjeta MP', rinde: 'Pedro Pablo Prueba Ficticio', monto: 13600 }
   ];
-  const proveedores = [{ nombre: 'COPEC S.A.', rut: '99.520.000-7', usos: 3, ultimo: '2026-10-27', categoria: 'Combustible', ceco: '' }];
+  const proveedores = [{ fantasia: 'Copec', razonSocial: 'COPEC S.A.', rut: '99.520.000-7', usos: 3, ultimo: '2026-10-27', categoria: 'Combustible', ceco: '' },
+    { fantasia: 'Ferretería El Maestro', razonSocial: 'Ferretería El Maestro Ltda.', rut: '76.543.210-3', usos: 1, ultimo: '2026-10-24',
+      categoria: 'Materiales y ferretería', ceco: '' }];
+  const cuerpo = r => String(r || '').toUpperCase().replace(/[^0-9K]/g, '').slice(0, -1).replace(/^0+/, '');
   const base = { movimiento: 'Desembolso MP', tipoDoc: 'Boleta electrónica', rut: '', ceco: '', medio: 'Tarjeta MP', rinde: 'Demo', observaciones: '', conciliacion: '' };
   const ultimos = [
     Object.assign({}, base, { id: 'CC-2026-0006', fecha: '2026-10-27', proveedor: 'COPEC S.A.', numero: '45872310', rut: '99.520.000-7', monto: 25990,
@@ -187,6 +190,10 @@ const Demo = (() => {
       case 'ping': return { ok: true, version: 'demo', cuenta: 'demo@telconsulting.cl' };
       case 'config': return { ok: true, listas, tarjetas: { mp: '****1234', santander: '' }, planillaUrl: '#', version: 'demo',
         custodia: custodiaPublica(), huellasQr: Object.assign({}, huellas), personas: personas.slice(), plantillas: plantillas.slice(), proveedores };
+      case 'proveedor': {
+        const p = proveedores.find(x => cuerpo(x.rut) === cuerpo(datos.rut));
+        return { ok: true, proveedor: p ? Object.assign({ fuente: 'Proveedores (demo)' }, p) : null };
+      }
       case 'guardarPlantillas': {
         const nueva = datos.plantillas[0], clave = normal(nueva.nombre);
         plantillas = plantillas.filter(p => normal(p.nombre) !== clave).concat([Object.assign({ monto: null }, nueva)]);
@@ -199,7 +206,8 @@ const Demo = (() => {
       };
       case 'ocr': return {
         ok: true, texto: 'COPEC S.A.\nR.U.T.: 99.520.000-7\nBOLETA ELECTRONICA\nN° 45872310\nTOTAL $ 25.990\n************1234',
-        sugeridos: { tipoDoc: 'Boleta electrónica', numero: '45872310', fecha: '2026-10-27', monto: 25990, montoConfianza: 'alta', rut: '99.520.000-7', proveedor: 'COPEC S.A.' },
+        sugeridos: { tipoDoc: 'Boleta electrónica', numero: '45872310', fecha: '2026-10-27', monto: 25990, montoConfianza: 'alta', rut: '99.520.000-7',
+          proveedor: 'Copec', razonSocial: 'COPEC S.A.', proveedorConocido: true },
         tarjetas: { 'Tarjeta MP': { resultado: 'coincide', encontradas: ['1234'], texto: '✓ ****1234' },
           'Tarjeta Santander': { resultado: 'sin_config', encontradas: ['1234'], texto: 'Tarjeta sin configurar' } },
         mercadoPago: false
