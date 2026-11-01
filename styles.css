@@ -232,7 +232,7 @@ main { max-width: 560px; margin: 0 auto; }
 .campo select { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--suave) 50%), linear-gradient(135deg, var(--suave) 50%, transparent 50%); background-position: calc(100% - 18px) 21px, calc(100% - 13px) 21px; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 30px; }
 .campo input:focus, .campo select:focus, .campo textarea:focus { border-color: var(--dorado); box-shadow: 0 0 0 3px rgba(201, 154, 63, .22); }
 .campo input.sugerido, .campo select.sugerido, .campo textarea.sugerido { border-left: 4px solid var(--dorado); }
-.campo input.invalido, .campo textarea.invalido { border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(179, 38, 30, .12); }
+.campo input.invalido, .campo textarea.invalido, .campo select.invalido { border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(179, 38, 30, .12); }
 .campo small { font-weight: 500; font-size: 12px; min-height: 0; }
 .campo small.ok { color: var(--verde); }
 .campo small.alerta { color: var(--rojo); }

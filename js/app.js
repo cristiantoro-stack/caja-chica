@@ -1,6 +1,6 @@
 /* App Caja Chica · flujo: capturar → revisar páginas → datos del gasto → guardar en Drive y en la planilla. */
 (() => {
-  const VERSION = '1.3.0';
+  const VERSION = '1.3.1';
   const MAX_BYTES = 20 * 1048576;
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
@@ -1162,7 +1162,10 @@
     const L = listas();
     llenarSelect($('#fTipo'), L.tiposDoc);
     llenarSelect($('#fMedio'), L.medios);
-    $('#listaCecos').innerHTML = L.cecos.map(c => `<option value="${esc(c.codigo)}">${esc(c.significado || '')}</option>`).join('');
+    const cecoActual = $('#fCeco').value;
+    $('#fCeco').innerHTML = '<option value="">Elegir (opcional)</option>'
+      + L.cecos.map(c => `<option value="${esc(c.codigo)}">${esc(c.codigo)}${c.significado ? ' · ' + esc(c.significado) : ''}</option>`).join('');
+    ponerCeco(cecoActual);
     $('#fFecha').max = hoyISO();          // sin fecha por defecto: el mes de la rendición lo define la fecha del documento
     if (!$('#fRinde').value) $('#fRinde').value = Api.config().nombre || '';
     elegirMovimiento(est.movimiento);
@@ -1209,7 +1212,7 @@
     est.categoria = c.nombre;
     $('#chipsCategoria').classList.remove('invalido');
     if (!est.tocados.has('ceco')) {
-      $('#fCeco').value = c.ceco || '';
+      ponerCeco(c.ceco);
       validarCeco();
     }
     pintarCategorias();
@@ -1225,6 +1228,13 @@
     s.textContent = r.ok ? 'RUT válido' : 'Dígito verificador no válido';
     s.className = r.ok ? 'ok' : 'alerta';
     return r.ok;
+  }
+
+  /** CeCo en el selector: uno que no esté en el catálogo (un registro antiguo) se muestra igual, con la alerta de validarCeco. */
+  function ponerCeco(v) {
+    const el = $('#fCeco');
+    if (v && !opciones('#fCeco').includes(v)) el.insertAdjacentHTML('beforeend', `<option value="${esc(v)}">${esc(v)} (fuera del catálogo)</option>`);
+    el.value = v || '';
   }
 
   function validarCeco() {
@@ -1590,6 +1600,7 @@
     const asegurarOpcion = (sel, v) => { if (v && !opciones(sel).includes(v)) $(sel).insertAdjacentHTML('beforeend', `<option>${esc(v)}</option>`); };
     asegurarOpcion('#fTipo', d.tipoDoc);
     asegurarOpcion('#fMedio', d.medio);
+    ponerCeco(d.ceco);
     const rep = representacion || {};
     [['fFecha', d.fecha], ['fMonto', d.monto ? miles(d.monto) : ''], ['fTipo', d.tipoDoc], ['fNumero', d.numero], ['fProveedor', d.proveedor],
       ['fRut', d.rut], ['fMedio', d.medio], ['fCeco', d.ceco], ['fDetalle', d.detalle], ['fRinde', d.rinde], ['fObs', d.observaciones],
@@ -2372,9 +2383,6 @@
     if (Array.isArray(r.plantillas)) est.plantillas = r.plantillas.filter(p => p && p.nombre);
     if (Array.isArray(r.proveedores)) est.proveedores = r.proveedores.filter(p => p && p.nombre);
     if (!local) guardarLocal('rapido', { personas: est.personas, plantillas: est.plantillas, proveedores: est.proveedores });
-    $('#listaPersonas').innerHTML = est.personas.map(p => `<option value="${esc(p.nombre)}">${esc(p.cargo || '')}</option>`).join('');
-    $('#listaProveedores').innerHTML = est.proveedores
-      .map(p => `<option value="${esc(p.nombre)}">${esc([p.rut, p.categoria].filter(Boolean).join(' · '))}</option>`).join('');
     if (est.vista === 'datos') pintarPlantillas();
     if (est.vista === 'entrega') pintarPersonasActa();
   }
@@ -2550,7 +2558,7 @@
     if (!est.plantilla && !est.categoria && prov.categoria && GASTOS.includes(est.movimiento)) {
       const cat = listas().categorias.find(c => c.nombre === prov.categoria);
       if (cat) elegirCategoria(cat);
-      if (prov.ceco && !est.tocados.has('ceco')) { $('#fCeco').value = prov.ceco; $('#fCeco').classList.add('sugerido'); validarCeco(); }
+      if (prov.ceco && !est.tocados.has('ceco')) { ponerCeco(prov.ceco); $('#fCeco').classList.add('sugerido'); validarCeco(); }
     }
   }
 
@@ -2900,7 +2908,7 @@
       tocarEntrega();
       pintarDeclaracion();
     }));
-    // Nombre de una persona de la base (escrito completo o elegido de la lista): se llenan su RUT, cargo y correo
+    // Nombre de una persona de la base (escrito completo, o nombre y apellido al salir del campo): se llenan su RUT, cargo y correo
     ['Entrega', 'Recibe'].forEach(pre => {
       const el = document.getElementById(`e${pre}Nombre`);
       el.addEventListener('input', () => {

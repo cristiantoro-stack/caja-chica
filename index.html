@@ -193,18 +193,16 @@
           <label class="campo">Tipo de documento<select id="fTipo"></select></label>
           <label class="campo">N° documento<input id="fNumero" inputmode="numeric"></label>
         </div>
-        <label class="campo" id="campoProveedor">Proveedor<input id="fProveedor" list="listaProveedores" autocomplete="off"></label>
-        <datalist id="listaProveedores"></datalist>
+        <label class="campo" id="campoProveedor">Proveedor<input id="fProveedor"></label>
         <div class="campos-2">
           <label class="campo" id="campoRut">RUT proveedor<input id="fRut" placeholder="76.123.456-7"><small id="rutEstado"></small></label>
           <label class="campo">Medio de pago<select id="fMedio"></select></label>
         </div>
-        <label class="campo" id="campoCeco">Centro de costo<input id="fCeco" list="listaCecos" placeholder="Opcional"><small id="cecoEstado"></small></label>
-        <datalist id="listaCecos"></datalist>
+        <label class="campo" id="campoCeco">Centro de costo<select id="fCeco"></select><small id="cecoEstado"></small></label>
 
         <details class="mas">
           <summary>Más datos</summary>
-          <label class="campo" id="campoRinde">Rinde<input id="fRinde" list="listaPersonas" autocomplete="off"></label>
+          <label class="campo" id="campoRinde">Rinde<input id="fRinde"></label>
           <label class="campo">Observaciones<textarea id="fObs" rows="2"></textarea></label>
         </details>
       </form>
@@ -266,7 +264,7 @@
       <div class="persona">
         <span class="persona-titulo" id="tituloEntrega">Entrega</span>
         <div class="chips chips-personas" id="eEntregaPersonas"></div>
-        <label class="campo">Nombre y apellido<input id="eEntregaNombre" maxlength="120" list="listaPersonas" autocomplete="off"></label>
+        <label class="campo">Nombre y apellido<input id="eEntregaNombre" maxlength="120"></label>
         <div class="campos-2">
           <label class="campo">RUT<input id="eEntregaRut" maxlength="14" placeholder="12.345.678-9" autocomplete="off"><small id="eEntregaRutEstado"></small></label>
           <label class="campo">Cargo<input id="eEntregaCargo" maxlength="120" autocomplete="off"></label>
@@ -275,15 +273,13 @@
       <div class="persona">
         <span class="persona-titulo" id="tituloRecibe">Recibe</span>
         <div class="chips chips-personas" id="eRecibePersonas"></div>
-        <label class="campo">Nombre y apellido<input id="eRecibeNombre" maxlength="120" list="listaPersonas" autocomplete="off"></label>
+        <label class="campo">Nombre y apellido<input id="eRecibeNombre" maxlength="120"></label>
         <div class="campos-2">
           <label class="campo">RUT<input id="eRecibeRut" maxlength="14" placeholder="12.345.678-9" autocomplete="off"><small id="eRecibeRutEstado"></small></label>
           <label class="campo">Cargo o área<input id="eRecibeCargo" maxlength="120" autocomplete="off"></label>
         </div>
         <label class="campo">Correo (opcional)<input id="eRecibeCorreo" type="email" inputmode="email" maxlength="120" autocomplete="off"></label>
       </div>
-
-      <datalist id="listaPersonas"></datalist>
 
       <h2 class="seccion">3 · Lugar, momento y condiciones</h2>
       <div class="control info" id="eUbicacion"><svg class="ico"><use href="#i-ubicacion"/></svg><span id="eUbicacionTexto">Buscando la ubicación…</span><button type="button" class="btn-texto" id="btnReubicar" hidden>Reintentar</button></div>
@@ -339,7 +335,7 @@
       <label class="campo">Dirección del servidor<input id="aUrl" type="url" placeholder="https://script.google.com/macros/s/…/exec"></label>
       <label class="campo">Clave de acceso<input id="aToken" type="password"></label>
       <h2 class="seccion">Quién rinde</h2>
-      <label class="campo">Nombre<input id="aNombre" placeholder="Nombre y apellido" list="listaPersonas" autocomplete="off"></label>
+      <label class="campo">Nombre<input id="aNombre" placeholder="Nombre y apellido"></label>
       <div class="campos-2">
         <label class="campo">RUT<input id="aRut" placeholder="12.345.678-9"></label>
         <label class="campo">Cargo<input id="aCargo" placeholder="Ej: Administración y Finanzas"></label>
