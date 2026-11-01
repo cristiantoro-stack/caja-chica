@@ -39,6 +39,8 @@
       <symbol id="i-ubicacion" viewBox="0 0 24 24"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.4"/></symbol>
       <symbol id="i-firma" viewBox="0 0 24 24"><path d="M3 17c2.5-4 4.5-9 6.5-9 1.6 0 .2 6.5 2 6.5s2.6-4 4.3-4c1.2 0 .7 3 2.2 3H21"/><path d="M3 20.5h18"/></symbol>
       <symbol id="i-telefono" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><circle cx="12" cy="9" r="2.6"/><path d="M10.5 18h3"/></symbol>
+      <symbol id="i-ojo" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-siguiente" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
       <symbol id="i-estrella" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.5 6 .8-4.4 4.1 1.1 5.9L12 17l-5.3 2.8 1.1-5.9L3.4 9.8l6-.8z"/></symbol>
       <symbol id="i-instalar" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 7v8M8.5 11.5L12 15l3.5-3.5"/></symbol>
     </defs>
@@ -126,7 +128,7 @@
 
     <!-- Páginas capturadas -->
     <section class="vista" id="v-paginas">
-      <p class="ayuda">Toca una página para ajustar el recorte, girarla o borrarla. Boleta larga: toma fotos de cerca, de arriba hacia abajo, repitiendo 4–5 líneas (¼ de la foto) entre una y otra.</p>
+      <p class="ayuda">Toca una página para verla como quedará en el PDF (con zoom); desde ahí la editas o la borras. Boleta larga: toma fotos de cerca, de arriba hacia abajo, repitiendo 4–5 líneas (¼ de la foto) entre una y otra.</p>
       <div class="paginas" id="paginas"></div>
       <label class="interruptor" id="filaUnir" hidden>
         <input type="checkbox" id="chkUnir">
@@ -404,14 +406,29 @@
         <canvas id="editorCanvas"></canvas>
         <svg id="editorSvg"></svg>
       </div>
+      <div class="previa" id="editorPrevia" hidden><img id="editorPreviaImg" alt="Resultado de la edición" draggable="false"></div>
     </div>
     <div class="editor-barra">
       <button id="edGirar"><svg class="ico"><use href="#i-girar"/></svg>Girar</button>
       <button id="edAuto"><svg class="ico"><use href="#i-auto"/></svg>Auto</button>
       <button id="edTodo"><svg class="ico"><use href="#i-completa"/></svg>Completa</button>
       <button id="edModo"><svg class="ico"><use href="#i-contraste"/></svg><span id="edModoTexto">B/N</span></button>
+      <button id="edVer"><svg class="ico"><use href="#i-ojo"/></svg><span id="edVerTexto">Ver</span></button>
       <button id="edBorrar"><svg class="ico"><use href="#i-basura"/></svg>Borrar</button>
       <button id="edListo" class="primario"><svg class="ico"><use href="#i-check"/></svg>Listo</button>
+    </div>
+  </div>
+
+  <!-- Vista previa de una página: como quedará en el PDF. Zoom con dos dedos, arrastrar y doble toque -->
+  <div class="capa capa-vista" id="capaVista" role="dialog" aria-modal="true" aria-labelledby="vistaTitulo" hidden>
+    <div class="tira-arriba"><strong id="vistaTitulo">Página 1</strong><span>Así queda en el PDF · pellizca para hacer zoom</span></div>
+    <div class="previa vista-lienzo" id="vistaLienzo"><img id="vistaImg" alt="Página como quedará en el PDF" draggable="false"></div>
+    <div class="editor-barra vista-barra">
+      <button id="vistaAnterior"><svg class="ico"><use href="#i-volver"/></svg>Anterior</button>
+      <button id="vistaEditar"><svg class="ico"><use href="#i-editar"/></svg>Editar</button>
+      <button id="vistaBorrar"><svg class="ico"><use href="#i-basura"/></svg>Borrar</button>
+      <button id="vistaSiguiente"><svg class="ico"><use href="#i-siguiente"/></svg>Siguiente</button>
+      <button id="vistaListo" class="primario"><svg class="ico"><use href="#i-check"/></svg>Listo</button>
     </div>
   </div>
 

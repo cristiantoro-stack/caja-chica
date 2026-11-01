@@ -1,6 +1,6 @@
 /* App Caja Chica · flujo: capturar → revisar páginas → datos del gasto → guardar en Drive y en la planilla. */
 (() => {
-  const VERSION = '1.4.0';
+  const VERSION = '1.5.0';
   const MAX_BYTES = 20 * 1048576;
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
@@ -132,6 +132,7 @@
 
   function cerrarCapa(despues) {
     est.trasCerrar = despues || null;
+    est.cerrandoCapa = !!est.capa;                     // lo cierra la app (no el "atrás" del teléfono)
     if (est.capa) history.back();
   }
 
@@ -140,6 +141,7 @@
     if (est.capa === 'qr') detenerQr();
     if (est.capa === 'editor') ocultarEditor();
     if (est.capa === 'tira') ocultarTira();
+    if (est.capa === 'vista') ocultarVista();
     est.capa = null;
   }
 
@@ -203,12 +205,19 @@
       cerrar();
       return;
     }
+    if (est.capa === 'editor' && ed && ed.previa && !est.cerrandoCapa) {
+      ocultarPreviaEditor();
+      history.pushState({ vista: est.vista, prof: (st.prof || 0) + 1, capa: 'editor' }, '');
+      return;
+    }
     if (est.capa) {
+      est.cerrandoCapa = false;
       const capa = est.capa, deActa = capa === 'camara' && camara && camara.destino === 'acta';
       cerrarCapaSinHistorial();
       let siguiente = est.trasCerrar;
       est.trasCerrar = null;
       if (capa === 'camara' && !deActa && !siguiente && est.paginas.length) siguiente = 'paginas';   // "atrás" con fotos tomadas
+      if (typeof siguiente === 'function') { siguiente(); return; }
       if (siguiente === 'inicio') volverInicio();
       else if (siguiente && siguiente !== est.vista) ir(siguiente);
       else if (est.vista === 'paginas') pintarPaginas();
@@ -611,12 +620,13 @@
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'pagina' + (p.procesando ? ' procesando' : '');
-      b.setAttribute('aria-label', `Página ${i + 1}: ajustar`);
+      b.setAttribute('aria-label', `Página ${i + 1}: ver como quedará`);
       b.innerHTML = (p.miniUrl ? `<img src="${p.miniUrl}" alt="">` : '') + `<span class="pagina-num">${i + 1}</span>`;
-      b.onclick = () => { if (!p.procesando) abrirEditor(p); };
+      b.onclick = () => { if (!p.procesando) abrirVista(p); };
       cont.appendChild(b);
     });
     $('#filaUnir').hidden = est.paginas.length < 2;
+    pintarBotonesVista();
     const ocupado = est.paginas.some(p => p.procesando), n = est.paginas.length;
     $('#btnContinuar').disabled = !n || ocupado;
     $('#btnContinuar').textContent = ocupado ? 'Procesando…' : `Continuar (${paginasTexto(n)})`;
@@ -1043,8 +1053,10 @@
   let ed = null, arrastre = null;
 
   async function abrirEditor(p) {
+    if (!p || p.procesando) return;
     let fuente;
     try { fuente = await Escaner.cargar(p.fuente); } catch (e) { toast('No se pudo abrir la página'); return; }
+    if (est.capa || !est.paginas.includes(p) || p.procesando || est.vista !== 'paginas') return;
     ed = { p, fuente, quad: p.quad.map(q => Object.assign({}, q)), rot: p.rot || 0, modo: p.modo || 'documento' };
     $('#capaEditor').hidden = false;
     abrirCapa('editor');
@@ -1053,9 +1065,211 @@
   }
 
   function ocultarEditor() {
+    ocultarPreviaEditor();
+    if (ed && ed.resultado) soltarResultado(ed);
     $('#capaEditor').hidden = true;
     ed = null;
     arrastre = null;
+  }
+
+  // ---------- Vista previa: la página como quedará en el PDF ----------
+
+  /**
+   * Zoom con dos dedos (pellizco centrado en los dedos), arrastre con un dedo cuando hay zoom y doble toque para acercar o
+   * volver a la imagen entera. Sobre la imagen se aplica translate + scale (origen al centro).
+   */
+  function crearZoom(caja, img) {
+    let s = 1, x = 0, y = 0, inicio = null, toque = null, ultimoToque = null;
+    const punteros = new Map();
+    const limitar = () => {
+      s = Math.min(6, Math.max(1, s));
+      const r = caja.getBoundingClientRect(), mx = Math.max(0, (img.offsetWidth * s - r.width) / 2 + 12), my = Math.max(0, (img.offsetHeight * s - r.height) / 2 + 12);
+      if (s === 1) { x = 0; y = 0; return; }
+      x = Math.min(mx, Math.max(-mx, x));
+      y = Math.min(my, Math.max(-my, y));
+    };
+    const aplicar = () => { limitar(); img.style.transform = `translate(${x}px, ${y}px) scale(${s})`; };
+    const centro = () => { const r = caja.getBoundingClientRect(); return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; };
+    const gesto = () => {
+      const [a, b] = Array.from(punteros.values());
+      return { dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, s, x, y };
+    };
+    const arrastre = p => ({ px: p.x, py: p.y, x, y, s });
+    // El punto de la imagen bajo el foco se queda bajo el foco: t' = p' − (p − t)·s'/s (relativo al centro)
+    const enfocar = (sNueva, fx0, fy0, fx1, fy1, base) => {
+      const c = centro(), k = sNueva / base.s;
+      x = (fx1 - c.cx) - (fx0 - c.cx - base.x) * k;
+      y = (fy1 - c.cy) - (fy0 - c.cy - base.y) * k;
+      s = sNueva;
+      aplicar();
+    };
+    caja.addEventListener('pointerdown', e => {
+      if (e.button > 0) return;
+      try { caja.setPointerCapture(e.pointerId); } catch (err) { /* sin captura igual funciona */ }
+      punteros.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (punteros.size >= 2) { inicio = gesto(); toque = null; ultimoToque = null; return; }
+      inicio = arrastre({ x: e.clientX, y: e.clientY });
+      toque = { x: e.clientX, y: e.clientY, t: Date.now() };
+    });
+    caja.addEventListener('pointermove', e => {
+      if (!punteros.has(e.pointerId)) return;
+      punteros.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (toque && Math.hypot(e.clientX - toque.x, e.clientY - toque.y) > 10) toque = null;      // ya es un arrastre
+      if (punteros.size >= 2 && inicio && inicio.dist) {
+        const g = gesto();
+        enfocar(Math.min(6, Math.max(1, inicio.s * g.dist / inicio.dist)), inicio.mx, inicio.my, g.mx, g.my, inicio);
+      } else if (punteros.size === 1 && inicio && inicio.px !== undefined && s > 1) {
+        x = inicio.x + (e.clientX - inicio.px);
+        y = inicio.y + (e.clientY - inicio.py);
+        aplicar();
+      }
+    });
+    const soltar = e => {
+      const eraUnDedo = punteros.size === 1;
+      punteros.delete(e.pointerId);
+      if (punteros.size >= 2) inicio = gesto();                                  // quedan dos dedos: sigue el pellizco
+      else if (punteros.size === 1) inicio = arrastre(Array.from(punteros.values())[0]);
+      else inicio = null;
+      if (e.type !== 'pointerup' || !eraUnDedo || !toque || Date.now() - toque.t > 250) { toque = null; return; }
+      const ahora = { x: toque.x, y: toque.y, t: Date.now() };
+      toque = null;
+      if (ultimoToque && ahora.t - ultimoToque.t < 320 && Math.hypot(ahora.x - ultimoToque.x, ahora.y - ultimoToque.y) < 30) {
+        ultimoToque = null;
+        if (s > 1.05) { s = 1; aplicar(); } else enfocar(2.5, ahora.x, ahora.y, ahora.x, ahora.y, { s, x, y });
+      } else {
+        ultimoToque = ahora;
+      }
+    };
+    caja.addEventListener('pointerup', soltar);
+    caja.addEventListener('pointercancel', soltar);
+    return {
+      reiniciar() { s = 1; x = 0; y = 0; punteros.clear(); inicio = null; toque = null; ultimoToque = null; img.style.transform = ''; },
+      escala: () => s
+    };
+  }
+
+  let zoomVista = null, zoomEditor = null, urlVista = null, vistaPagina = null;
+
+  /** Abre la vista previa de una página (lo que irá al PDF). */
+  function abrirVista(p) {
+    if (!p || !p.salida || est.capa) return;
+    zoomVista = zoomVista || crearZoom($('#vistaLienzo'), $('#vistaImg'));
+    $('#capaVista').hidden = false;
+    abrirCapa('vista');
+    mostrarEnVista(p);
+    $('#vistaListo').focus();
+  }
+
+  function mostrarEnVista(p) {
+    vistaPagina = p;
+    if (urlVista) URL.revokeObjectURL(urlVista);
+    urlVista = URL.createObjectURL(p.salida);
+    $('#vistaImg').src = urlVista;
+    zoomVista.reiniciar();
+    const i = est.paginas.indexOf(p), n = est.paginas.length;
+    $('#vistaTitulo').textContent = n > 1 ? `Página ${i + 1} de ${n}` : 'Página';
+    pintarBotonesVista();
+  }
+
+  function pintarBotonesVista() {
+    if (est.capa !== 'vista' || !vistaPagina) return;
+    const i = est.paginas.indexOf(vistaPagina), lista = q => !!(q && q.salida && !q.procesando);
+    $('#vistaAnterior').disabled = !lista(est.paginas[i - 1]);
+    $('#vistaSiguiente').disabled = !lista(est.paginas[i + 1]);
+  }
+
+  function ocultarVista() {
+    $('#capaVista').hidden = true;
+    if (urlVista) URL.revokeObjectURL(urlVista);
+    urlVista = null;
+    vistaPagina = null;
+    $('#vistaImg').removeAttribute('src');
+  }
+
+  function moverVista(paso) {
+    const i = est.paginas.indexOf(vistaPagina), p = est.paginas[i + paso];
+    if (p && !p.procesando && p.salida) mostrarEnVista(p);
+  }
+
+  async function borrarDesdeVista() {
+    const p = vistaPagina;
+    if (!p) return;
+    const n = est.paginas.length, i = est.paginas.indexOf(p);
+    if (!(await preguntar('Borrar página', n > 1 ? `¿Borrar la página ${i + 1}?` : '¿Borrar la página? No queda ninguna otra.', 'Borrar', 'Cancelar'))) return;
+    liberar(p);
+    est.paginas = est.paginas.filter(x => x !== p);
+    olvidarLectura();
+    guardarSesion();
+    unirPaginas();
+    const otra = est.paginas[Math.min(i, est.paginas.length - 1)];
+    if (otra && otra.salida && !otra.procesando) { mostrarEnVista(otra); pintarPaginas(); }
+    else cerrarCapa(est.paginas.length ? null : 'inicio');
+  }
+
+  // ---- En el editor: "Ver" muestra el resultado con los ajustes actuales, antes de aceptarlos ----
+
+  const claveEd = () => JSON.stringify([ed.quad.map(q => [Math.round(q.x * 1e4), Math.round(q.y * 1e4)]), ed.rot, ed.modo]);
+
+  function soltarResultado(e) {
+    e.resultado = null;
+  }
+
+  function ocultarPreviaEditor() {
+    $('#editorPrevia').hidden = true;
+    $('#editorPreviaImg').removeAttribute('src');
+    if (!$('#edVer').getAttribute('aria-busy')) $('#edVerTexto').textContent = 'Ver';
+    if (ed && ed.previaUrl) { URL.revokeObjectURL(ed.previaUrl); ed.previaUrl = null; }
+    if (ed) ed.previa = false;
+  }
+
+  /**
+   * Resultado de la edición con unos ajustes: una sola vez por clave y en la misma fila de trabajo que las demás páginas
+   * (cadena), para no procesar dos imágenes grandes a la vez en el teléfono.
+   */
+  function resultadoEdicion(e, clave) {
+    if (e.resultado && e.resultado.clave === clave) return Promise.resolve(e.resultado);
+    if (e.enCurso && e.enCurso.clave === clave) return e.enCurso.promesa;
+    const ajustes = { quad: e.quad.map(q => Object.assign({}, q)), rot: e.rot, modo: e.modo };
+    const promesa = cadena.then(() => Escaner.procesar(e.fuente, ajustes)).then(r => {
+      e.resultado = Object.assign(r, { clave });
+      if (e.enCurso && e.enCurso.clave === clave) e.enCurso = null;
+      return e.resultado;
+    });
+    cadena = promesa.catch(() => {});
+    e.enCurso = { clave, promesa };
+    return promesa;
+  }
+
+  let turnoVer = 0;
+
+  async function verEdicion() {
+    if (!ed) return;
+    if (ed.previa) { ocultarPreviaEditor(); return; }
+    const e = ed, boton = $('#edVer'), clave = claveEd(), turno = ++turnoVer;
+    boton.disabled = true;
+    boton.setAttribute('aria-busy', 'true');
+    $('#edVerTexto').textContent = '…';
+    try {
+      await resultadoEdicion(e, clave);
+      if (ed !== e || turno !== turnoVer) return;               // se cerró el editor o hay otro "Ver" más nuevo
+      if (claveEd() !== clave) { $('#edVerTexto').textContent = 'Ver'; return; }   // cambió un ajuste mientras se procesaba
+      zoomEditor = zoomEditor || crearZoom($('#editorPrevia'), $('#editorPreviaImg'));
+      e.previaUrl = URL.createObjectURL(e.resultado.salida);
+      $('#editorPreviaImg').src = e.previaUrl;
+      zoomEditor.reiniciar();
+      $('#editorPrevia').hidden = false;
+      e.previa = true;
+      $('#edVerTexto').textContent = 'Ajustar';
+    } catch (err) {
+      toast('No se pudo procesar: ' + (err.message || 'error'));
+      if (ed === e) $('#edVerTexto').textContent = 'Ver';
+    } finally {
+      if (turno === turnoVer) {
+        boton.disabled = false;
+        boton.removeAttribute('aria-busy');
+        if (ed === e && !e.previa && $('#edVerTexto').textContent === '…') $('#edVerTexto').textContent = 'Ver';
+      }
+    }
   }
 
   function dibujarEditor() {
@@ -1111,13 +1325,28 @@
 
   function aplicarEdicion() {
     const { p, fuente, quad, rot, modo } = ed;
+    const visto = ed.resultado && ed.resultado.clave === claveEd() ? ed.resultado : null;
+    if (visto) {
+      ed.resultado = null;
+      liberar(p);
+      Object.assign(p, { quad, rot, modo, salida: visto.salida, mini: visto.mini, ancho: visto.ancho, alto: visto.alto, liberada: false });
+      p.miniUrl = URL.createObjectURL(p.mini);
+      p.version = (p.version || 0) + 1;
+      olvidarLectura();
+      cerrarCapa();
+      pintarPaginas();
+      guardarSesion();
+      unirPaginas();
+      return;
+    }
+    const enCurso = ed.enCurso && ed.enCurso.clave === claveEd() ? ed.enCurso.promesa : null;
     Object.assign(p, { quad, rot, modo, procesando: true });
     olvidarLectura();
     cerrarCapa();
     pintarPaginas();
     cadena = cadena.then(async () => {
       try {
-        const nuevo = await Escaner.procesar(fuente, p);
+        const nuevo = enCurso ? await enCurso : await Escaner.procesar(fuente, p);
         liberar(p);
         Object.assign(p, nuevo, { liberada: false });      // sigue viva: solo se soltaron sus imágenes anteriores
         p.miniUrl = URL.createObjectURL(p.mini);
@@ -2945,18 +3174,34 @@
       pintarQuad();
     });
     ['pointerup', 'pointercancel'].forEach(t => svg.addEventListener(t, () => { arrastre = null; }));
-    $('#edGirar').onclick = () => { ed.rot = (ed.rot + 90) % 360; dibujarEditor(); };
+    $('#edGirar').onclick = () => { ocultarPreviaEditor(); ed.rot = (ed.rot + 90) % 360; dibujarEditor(); };
+    $('#edVer').onclick = verEdicion;
     $('#edAuto').onclick = () => {
+      ocultarPreviaEditor();
       const q = Escaner.detectar(ed.fuente);
       if (!q) toast('No se distingue el borde: ajusta las esquinas a mano');
       ed.quad = (q || Escaner.COMPLETA).map(p => Object.assign({}, p));
       pintarQuad();
     };
-    $('#edTodo').onclick = () => { ed.quad = Escaner.COMPLETA.map(p => Object.assign({}, p)); pintarQuad(); };
-    $('#edModo').onclick = () => { ed.modo = ed.modo === 'color' ? 'documento' : 'color'; pintarModo(); };
+    $('#edTodo').onclick = () => { ocultarPreviaEditor(); ed.quad = Escaner.COMPLETA.map(p => Object.assign({}, p)); pintarQuad(); };
+    $('#edModo').onclick = () => {
+      ed.modo = ed.modo === 'color' ? 'documento' : 'color';
+      pintarModo();
+      if (ed.previa) { ocultarPreviaEditor(); verEdicion(); }        // en la vista previa, B/N ↔ color se ve al tiro
+    };
+    // Vista previa de una página
+    $('#vistaAnterior').onclick = () => moverVista(-1);
+    $('#vistaSiguiente').onclick = () => moverVista(1);
+    $('#vistaListo').onclick = () => cerrarCapa();
+    $('#vistaBorrar').onclick = borrarDesdeVista;
+    $('#vistaEditar').onclick = () => { const p = vistaPagina; if (p) cerrarCapa(() => abrirEditor(p)); };
     $('#edBorrar').onclick = borrarPagina;
     $('#edListo').onclick = aplicarEdicion;
-    window.addEventListener('resize', () => { if (ed) dibujarEditor(); });
+    window.addEventListener('resize', () => {
+      if (ed) dibujarEditor();
+      if (zoomVista && est.capa === 'vista') zoomVista.reiniciar();
+      if (zoomEditor && ed && ed.previa) zoomEditor.reiniciar();
+    });
 
     Object.keys(CAMPOS).forEach(id => {
       const el = document.getElementById(id), campo = CAMPOS[id];
