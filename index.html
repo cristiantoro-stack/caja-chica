@@ -118,7 +118,7 @@
       </button>
       <div class="fila-botones">
         <button class="btn btn-secundario" id="btnGaleria"><svg class="ico"><use href="#i-imagen"/></svg>Galería</button>
-        <button class="btn btn-secundario" id="btnPdf"><svg class="ico"><use href="#i-archivo"/></svg>Subir PDF</button>
+        <button class="btn btn-secundario" id="btnArchivo"><svg class="ico"><use href="#i-archivo"/></svg>Subir archivo</button>
       </div>
 
       <div class="aviso aviso-oscuro" id="avisoSesion" hidden>
@@ -166,8 +166,9 @@
         </div>
       </div>
       <div class="fila-botones">
-        <button class="btn btn-secundario" id="btnMasCamara"><svg class="ico"><use href="#i-camara"/></svg>Otra foto</button>
+        <button class="btn btn-secundario" id="btnMasCamara"><svg class="ico"><use href="#i-camara"/></svg>Cámara</button>
         <button class="btn btn-secundario" id="btnMasGaleria"><svg class="ico"><use href="#i-imagen"/></svg>Galería</button>
+        <button class="btn btn-secundario" id="btnMasArchivo"><svg class="ico"><use href="#i-archivo"/></svg>Archivo</button>
       </div>
       <div class="pie"><button class="btn btn-principal" id="btnContinuar">Continuar</button></div>
     </section>
@@ -525,7 +526,8 @@
 
   <input type="file" id="inCamaraNativa" accept="image/*" capture="environment" hidden>
   <input type="file" id="inGaleria" accept="image/*" multiple hidden>
-  <input type="file" id="inPdf" accept="application/pdf" hidden>
+  <input type="file" id="inMasArchivo" accept="image/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif" multiple hidden>
+  <input type="file" id="inArchivo" accept="application/pdf,.pdf,image/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif" multiple hidden>
   <input type="file" id="inFotoEntrega" accept="image/*" capture="environment" hidden>
 
   <script src="js/db.js"></script>

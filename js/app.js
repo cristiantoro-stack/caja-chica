@@ -1,6 +1,6 @@
 /* App Caja Chica · flujo: capturar → revisar páginas → datos del gasto → guardar en Drive y en la planilla. */
 (() => {
-  const VERSION = '1.8.0';
+  const VERSION = '1.8.2';
   const MAX_BYTES = 20 * 1048576;
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
@@ -602,7 +602,10 @@
         if (!est.paginas.includes(p)) liberar(p);       // se descartó la captura mientras se procesaba
       } catch (e) {
         est.paginas = est.paginas.filter(x => x !== p);
-        toast(e.message || 'No se pudo leer la imagen');
+        toast(e.message || 'No se pudo leer la imagen', 6500);
+        if (!est.paginas.length && !est.pdf && est.vista === 'paginas' && origen !== 'camara' && origen !== 'cuadro') {
+          setTimeout(() => { if (!est.paginas.length && est.vista === 'paginas') { guardarEtapa(null); volverInicio(); } }, 0);
+        }
       }
       p.procesando = false;
       pintarPaginas();
@@ -620,6 +623,35 @@
     if (!archivos.length) return;
     if (est.vista !== 'paginas') ir('paginas');
     archivos.forEach(f => agregarFoto(f, origen));
+  }
+
+  /** ¿Es un PDF? Por su tipo o extensión y, si el archivo no dice qué es, por sus primeros bytes ("%PDF-"). */
+  async function esPdf(f) {
+    if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '')) return true;
+    if (f.type && f.type !== 'application/octet-stream') return false;
+    try { return (await f.slice(0, 5).text()) === '%PDF-'; } catch (e) { return false; }
+  }
+
+  /** Separa PDF de imágenes: un PDF solo va directo a los datos; si vienen imágenes, se usan ellas y se avisa por los PDF. */
+  async function separarArchivos(archivos) {
+    const marcas = await Promise.all(archivos.map(esPdf));
+    return { pdfs: archivos.filter((_, i) => marcas[i]), imagenes: archivos.filter((_, i) => !marcas[i]) };
+  }
+
+  /**
+   * "Subir archivo": un PDF va directo a los datos del gasto; una o más imágenes (JPG, PNG, WEBP…) pasan por el escáner
+   * igual que una foto (recorte, edición y vista previa) y siguen el proceso normal.
+   */
+  async function tomarSubidos(evento) {
+    const archivos = Array.from(evento.target.files || []);
+    evento.target.value = '';
+    if (!archivos.length) return;
+    const { pdfs, imagenes } = await separarArchivos(archivos);
+    if (pdfs.length === 1 && !imagenes.length) { usarPdf(pdfs[0], pdfs[0].name, 'pdf'); return; }
+    if (pdfs.length) toast(imagenes.length ? 'Un PDF se sube solo, sin imágenes: agregué solo las imágenes' : 'Sube un PDF a la vez', 5000);
+    if (!imagenes.length) return;
+    if (est.vista !== 'paginas') ir('paginas');
+    imagenes.forEach(f => agregarFoto(f, 'archivo'));
   }
 
   function usarPdf(blob, nombre, origen) {
@@ -3459,15 +3491,20 @@
     } catch (e) { lista = null; }
     history.replaceState(history.state, '', location.pathname);
     if (!lista || !lista.length) return;
-    const pdf = lista.find(a => a.tipo === 'application/pdf');
-    if (pdf) {
+    const marcas = await Promise.all(lista.map(a => esPdf({ type: a.tipo || '', name: a.nombre || '', slice: (x, y) => a.blob.slice(x, y) })));
+    const pdfs = lista.filter((_, i) => marcas[i]);
+    const imagenes = lista.filter((a, i) => !marcas[i] && (/^image\//.test(a.tipo) || !a.tipo || /\.(jpe?g|png|webp|gif|bmp|hei[cf])$/i.test(a.nombre || '')));
+    if (pdfs.length === 1 && !imagenes.length) {
       if (!(await descartarSiHay())) { toast('Se conservó la captura anterior: comparte el PDF de nuevo después', 5000); return; }
       nuevaCaptura();
-      usarPdf(pdf.blob, pdf.nombre, 'compartido');
+      usarPdf(pdfs[0].blob, pdfs[0].nombre, 'compartido');
       return;
     }
-    const imagenes = lista.filter(a => /^image\//.test(a.tipo));
-    if (!imagenes.length) return;
+    if (pdfs.length) toast(imagenes.length ? 'Un PDF se comparte solo, sin imágenes: agregué solo las imágenes' : 'Comparte un PDF a la vez', 5000);
+    if (!imagenes.length) {
+      if (lista.length && !pdfs.length) toast('Ese archivo no es una imagen ni un PDF', 5000);
+      return;
+    }
     if (est.paginas.length) {
       const agregar = await preguntar('Captura sin terminar', `Tienes ${paginasTexto(est.paginas.length)} sin guardar. ¿Agrego lo compartido a esa captura?`, 'Agregar', 'Empezar de cero');
       if (!agregar) nuevaCaptura();
@@ -3520,7 +3557,7 @@
     const libre = () => Date.now() >= (est.bloqueoToques || 0);
     $('#btnEscanear').onclick = async () => { if (libre() && await descartarSiHay()) { nuevaCaptura(); abrirCamara(); } };
     $('#btnGaleria').onclick = async () => { if (libre() && await descartarSiHay()) { nuevaCaptura(); $('#inGaleria').click(); } };
-    $('#btnPdf').onclick = async () => { if (libre() && await descartarSiHay()) { nuevaCaptura(); $('#inPdf').click(); } };
+    $('#btnArchivo').onclick = async () => { if (libre() && await descartarSiHay()) { nuevaCaptura(); $('#inArchivo').click(); } };
     $('#btnRefrescar').onclick = () => refrescarResumen(true);
     $('#btnEnviarCola').onclick = enviarColaManual;
     $('#btnDescartarCola').onclick = descartarBloqueados;
@@ -3535,14 +3572,12 @@
 
     $('#inGaleria').onchange = e => tomarArchivos(e, 'galeria');
     $('#inCamaraNativa').onchange = e => tomarArchivos(e, 'camara');
-    $('#inPdf').onchange = e => {
-      const f = e.target.files[0];
-      e.target.value = '';
-      if (f) usarPdf(f, f.name, 'pdf');
-    };
+    $('#inArchivo').onchange = tomarSubidos;
 
     $('#btnMasCamara').onclick = () => abrirCamara();
     $('#btnMasGaleria').onclick = () => $('#inGaleria').click();
+    $('#btnMasArchivo').onclick = () => $('#inMasArchivo').click();
+    $('#inMasArchivo').onchange = e => tomarArchivos(e, 'archivo');
     $('#btnContinuar').onclick = entrarDatos;
     $('#chkUnir').onchange = () => { guardarSesion(); unirPaginas(); };
     $('#btnRevisarTira').onclick = abrirTira;

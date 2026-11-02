@@ -19,6 +19,12 @@ const Escaner = (() => {
     if (c) { c.width = 0; c.height = 0; }
   }
 
+  /** Lo transparente de una imagen (PNG, WEBP, GIF) queda blanco, como el papel: en JPEG quedaría negro. */
+  function fondoBlanco(ctx, c) {
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+  }
+
   async function decodificar(blob) {
     try {
       return await createImageBitmap(blob, { imageOrientation: 'from-image' });
@@ -30,7 +36,14 @@ const Escaner = (() => {
         await img.decode();
         return img;
       } catch (e2) {
-        throw new Error('Formato de imagen no soportado (usa JPG o PNG)');
+        // HEIC/HEIF (fotos "de alta eficiencia" de algunos teléfonos): el navegador no las abre
+        if (/hei[cf]/i.test(blob.type || '') || /\.hei[cf]$/i.test(blob.name || '')) {
+          throw new Error('Las fotos HEIC no se pueden abrir aquí: compártela como JPG o, en la cámara, desactiva el formato HEIF');
+        }
+        if (/^image\/(jpeg|png|webp|gif|bmp)$/i.test(blob.type || '') || /\.(jpe?g|png|webp|gif|bmp)$/i.test(blob.name || '')) {
+          throw new Error('No se pudo abrir la imagen (puede ser demasiado grande para el teléfono): prueba con una captura de pantalla de ella');
+        }
+        throw new Error('Formato de imagen no soportado: usa JPG, PNG o WEBP (o un PDF)');
       } finally {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
@@ -44,6 +57,7 @@ const Escaner = (() => {
     } catch (e) {
       const img = await decodificar(blob), c = lienzo(w, h), ctx = c.getContext('2d');
       ctx.imageSmoothingQuality = 'high';
+      fondoBlanco(ctx, c);
       ctx.drawImage(img, 0, 0, w, h);
       if (img.close) img.close();
       return c;
@@ -57,6 +71,7 @@ const Escaner = (() => {
     const c = lienzo(Math.max(1, Math.round(img.width * k)), Math.max(1, Math.round(img.height * k)));
     const ctx = c.getContext('2d');
     ctx.imageSmoothingQuality = 'high';
+    fondoBlanco(ctx, c);
     ctx.drawImage(img, 0, 0, c.width, c.height);
     if (img.close) img.close();
     c.original = k === 1;
@@ -1233,6 +1248,7 @@ const Escaner = (() => {
     if (k >= 1) { if (img.close) img.close(); return blob; }
     const c = lienzo(Math.max(1, Math.round(img.width * k)), Math.max(1, Math.round(img.height * k))), ctx = c.getContext('2d');
     ctx.imageSmoothingQuality = 'high';
+    fondoBlanco(ctx, c);
     ctx.drawImage(img, 0, 0, c.width, c.height);
     if (img.close) img.close();
     const r = await aJpeg(c, calidad || CALIDAD);
