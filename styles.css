@@ -267,6 +267,10 @@ main { max-width: 560px; margin: 0 auto; }
 .control.revisar { background: var(--ambar-f); color: var(--ambar); }
 .control.info { background: var(--alterno); color: var(--suave); }
 .representacion { border-left: 3px solid var(--dorado); padding-left: 12px; margin-bottom: 12px; }
+.reembolso .interruptor { margin-bottom: 12px; }
+.reembolso #btnReAnterior { display: block; margin: 0 0 10px; text-align: left; }
+.reembolso .segmentado { margin-bottom: 0; }
+select:disabled { opacity: .75; }
 .mas { margin: 4px 0 8px; }
 .mas summary { color: var(--dorado-texto); font-weight: 600; padding: 8px 0; list-style: none; }
 .mas summary::-webkit-details-marker { display: none; }

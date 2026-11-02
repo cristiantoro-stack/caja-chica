@@ -1,6 +1,6 @@
 /* App Caja Chica · flujo: capturar → revisar páginas → datos del gasto → guardar en Drive y en la planilla. */
 (() => {
-  const VERSION = '1.5.1';
+  const VERSION = '1.6.0';
   const MAX_BYTES = 20 * 1048576;
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
@@ -8,6 +8,9 @@
   const TITULOS = { inicio: 'Caja Chica', paginas: 'Páginas del documento', datos: 'Datos del gasto', listo: 'Resultado', ajustes: 'Ajustes', registro: 'Registro',
     entrega: 'Entrega de tarjeta', acta: 'Acta de la tarjeta' };
   const GASTOS = ['Desembolso MP', 'Rendición Santander'];
+  // Reembolso a un colaborador que pagó con su dinero: el medio es la transferencia a su cuenta, desde MP o Santander
+  const MEDIO_REEMBOLSO = { 'Desembolso MP': 'Transferencia MP', 'Rendición Santander': 'Transferencia Santander' };
+  const medioPorDefecto = mov => (mov === 'Desembolso MP' ? 'Tarjeta MP' : mov === 'Rendición Santander' ? 'Tarjeta Santander' : 'Transferencia Santander');
   const CAMPOS = { fFecha: 'fecha', fMonto: 'monto', fTipo: 'tipoDoc', fNumero: 'numero', fProveedor: 'proveedor', fRazon: 'razonSocial', fRut: 'rut',
     fMedio: 'medio', fCeco: 'ceco', fDetalle: 'detalle' };
   const URL_SERVIDOR = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+|macros)\/s\/[\w-]+\/exec$/;
@@ -21,7 +24,9 @@
     movimiento: 'Desembolso MP', categoria: '', tocados: new Set(),
     guardando: false,
     registro: null,       // ficha abierta: { registro, representacion, deshacer, cargando, error }
-    edicion: null,        // corrección en curso: { id, original, representacion, previo }
+    edicion: null,        // corrección en curso: { id, original, representacion, reembolso, previo }
+    reembolso: false,     // lo pagó un colaborador y se le transfiere (datos en el bloque "Reembolso")
+    medioSinReembolso: '',  // el medio que había antes de marcar el reembolso: vuelve al desmarcarlo
     ultimo: null,         // lo recién guardado (fotos y datos), para deshacer y volver a corregir
     tira: null,           // boleta larga unida: { clave, resultado, recorte, proceso }
     modoTira: 'auto',     // 'auto': quita el traslape entre fotos; 'simple': una tras otra
@@ -463,7 +468,8 @@
     return {
       valores, categoria: est.categoria, movimiento: est.movimiento, tocados: Array.from(est.tocados), plantilla: est.plantilla,
       sugeridos: IDS_FORMULARIO.filter(id => document.getElementById(id).classList.contains('sugerido')), lectura: est.lectura,
-      provAplicado: est.provAplicado || null, plantillaAplicada: est.plantillaAplicada || null,
+      provAplicado: est.provAplicado || null, plantillaAplicada: est.plantillaAplicada || null, reembolso: !!est.reembolso,
+      medioSinReembolso: est.medioSinReembolso || '',
       paginasClave: clavePaginas()
     };
   }
@@ -488,6 +494,8 @@
     est.plantilla = f.plantilla || null;
     est.provAplicado = f.provAplicado || null;
     est.plantillaAplicada = f.plantillaAplicada || null;
+    est.reembolso = !!f.reembolso;
+    est.medioSinReembolso = f.medioSinReembolso || '';
     elegirMovimiento(est.movimiento);
     const v = f.valores || {};
     IDS_FORMULARIO.forEach(id => {
@@ -501,6 +509,8 @@
     pintarCategorias();
     validarRut();
     validarCeco();
+    pintarReembolso();
+    validarReRut();
     pintarControlTarjeta();
     pintarPlantillas();
   }
@@ -525,7 +535,7 @@
     est.paginas.forEach(liberar);
     Object.assign(est, { paginas: [], pdf: null, origen: null, capturadoEn: null, lectura: null, categoria: '', movimiento: 'Desembolso MP',
       tira: null, modoTira: 'auto', modoCamara: 'documento', plantilla: null, plantillaSugerida: null, verTodasPlantillas: false,
-      formularioGuardado: null, provAplicado: null, plantillaAplicada: null });
+      formularioGuardado: null, provAplicado: null, plantillaAplicada: null, reembolso: false, medioSinReembolso: '' });
     est.tocados = new Set();
     est.lecturaId++;
     $('#chkUnir').checked = false;
@@ -1381,8 +1391,10 @@
   }
 
   function limpiarFormulario() {
-    ['fFecha', 'fMonto', 'fNumero', 'fProveedor', 'fRazon', 'fRut', 'fCeco', 'fDetalle', 'fObs', 'fEmpresa', 'fAsistentes', 'fMotivo']
-      .forEach(id => { document.getElementById(id).value = ''; });
+    ['fFecha', 'fMonto', 'fNumero', 'fProveedor', 'fRazon', 'fRut', 'fCeco', 'fDetalle', 'fObs', 'fEmpresa', 'fAsistentes', 'fMotivo',
+      'fReNombre', 'fReRut', 'fReFecha', 'fReOperacion'].forEach(id => { document.getElementById(id).value = ''; });
+    $('#fReRut').dataset.auto = '';
+    $('#reRutEstado').textContent = '';
     $$('.sugerido, .invalido').forEach(el => el.classList.remove('sugerido', 'invalido'));
     $('#fRinde').value = Api.config().nombre || '';
     $('#fMonto').placeholder = '$0';
@@ -1390,6 +1402,7 @@
     $('#rutEstado').textContent = '';
     $('#provEstado').textContent = '';
     $('#cecoEstado').textContent = '';
+    pintarReembolso();
   }
 
   function prepararDatos() {
@@ -1401,20 +1414,23 @@
       + L.cecos.map(c => `<option value="${esc(c.codigo)}">${esc(c.codigo)}${c.significado ? ' · ' + esc(c.significado) : ''}</option>`).join('');
     ponerCeco(cecoActual);
     $('#fFecha').max = hoyISO();          // sin fecha por defecto: el mes de la rendición lo define la fecha del documento
+    $('#fReFecha').max = hoyISO();
     if (!$('#fRinde').value) $('#fRinde').value = Api.config().nombre || '';
     elegirMovimiento(est.movimiento);
     pintarPlantillas();
   }
 
   function elegirMovimiento(mov) {
+    // Con reembolso, el medio "de antes" ya no es de esta cuenta: al desmarcarlo vuelve el habitual de la nueva
+    if (est.reembolso && est.medioSinReembolso && mov !== est.movimiento) est.medioSinReembolso = medioPorDefecto(mov);
     est.movimiento = mov;
     $$('#segMovimiento button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.valor === mov)));
     const gasto = GASTOS.includes(mov);
     $('#grupoCategoria').hidden = !gasto;
     $('#campoCeco').hidden = !gasto;
-    if (!est.tocados.has('medio')) {
-      $('#fMedio').value = mov === 'Desembolso MP' ? 'Tarjeta MP' : mov === 'Rendición Santander' ? 'Tarjeta Santander' : 'Transferencia Santander';
-    }
+    if (!gasto) est.reembolso = false;               // un ingreso no es un reembolso
+    if (est.reembolso) $('#fMedio').value = MEDIO_REEMBOLSO[mov];
+    else if (!est.tocados.has('medio')) $('#fMedio').value = medioPorDefecto(mov);
     if (gasto) {
       if (est.categoria === 'Recarga caja chica') est.categoria = '';
       $('#fDetalle').placeholder = '¿Qué se compró y para qué?';
@@ -1425,6 +1441,7 @@
       if (!est.tocados.has('tipoDoc')) $('#fTipo').value = 'Comprobante de transferencia';
     }
     pintarCategorias();
+    pintarReembolso();
     pintarControlTarjeta();
   }
 
@@ -1459,13 +1476,147 @@
     tocarFormulario();
   }
 
-  function validarRut() {
-    const el = $('#fRut'), s = $('#rutEstado'), v = el.value.trim();
+  // ---------- Reembolso a colaborador ----------
+
+  /** Lo pagó un colaborador con su dinero: se le transfiere (desde MP o Santander), el medio es esa transferencia y lo rinde él. */
+  function cambiarReembolso(si) {
+    const medio = $('#fMedio');
+    est.reembolso = !!si && GASTOS.includes(est.movimiento);
+    if (est.reembolso) {
+      if (medio.value !== MEDIO_REEMBOLSO[est.movimiento]) est.medioSinReembolso = medio.value;
+      medio.value = MEDIO_REEMBOLSO[est.movimiento];
+      medio.classList.remove('sugerido', 'invalido');
+    } else {
+      // Vuelve el medio de antes; si no había otro (un registro que ya era reembolso), el habitual, marcado para revisarlo
+      const antes = est.medioSinReembolso;
+      est.medioSinReembolso = '';
+      medio.value = antes && opciones('#fMedio').includes(antes) && antes !== MEDIO_REEMBOLSO[est.movimiento] ? antes : medioPorDefecto(est.movimiento);
+      if (!antes) {
+        medio.classList.add('sugerido');
+        toast('Revisa el medio de pago con que se pagó la boleta');
+      }
+    }
+    pintarReembolso();
+    pintarControlTarjeta();
+    tocarFormulario();
+  }
+
+  function pintarReembolso() {
+    const gasto = GASTOS.includes(est.movimiento);
+    if (!gasto) est.reembolso = false;
+    $('#grupoReembolso').hidden = !gasto;
+    $('#chkReembolso').checked = !!est.reembolso;
+    $('#cuerpoReembolso').hidden = !est.reembolso;
+    $('#fMedio').disabled = !!est.reembolso;
+    $('#campoRinde').hidden = !!est.reembolso || !!est.edicion;
+    $$('#segReembolso button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.valor === est.movimiento)));
+    $('#segReembolso').classList.toggle('bloqueado', !!est.edicion);
+    if (!est.reembolso) return;
+    $('#fMedio').value = MEDIO_REEMBOLSO[est.movimiento];      // aunque otra acción lo haya cambiado (plantilla, datos recuperados)
+    pintarPersonasReembolso();
+    pintarAyudaReembolso();
+  }
+
+  /** Las personas de la base, primero las ya reembolsadas desde este teléfono. Tocar la elegida la suelta. */
+  function pintarPersonasReembolso() {
+    const cont = $('#rePersonas'), actual = normalNombre($('#fReNombre').value), uso = usoLocal('reembolsos');
+    let orden = est.personas.map((p, i) => ({ p, i, n: uso[normalNombre(p.nombre)] || 0 })).sort((a, b) => b.n - a.n || a.i - b.i).map(x => x.p);
+    const elegida = orden.find(p => normalNombre(p.nombre) === actual);
+    orden = orden.slice(0, 8);
+    if (elegida && !orden.includes(elegida)) orden = [elegida].concat(orden.slice(0, 7));
+    cont.innerHTML = '';
+    orden.forEach(p => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = nombreCorto(p.nombre);
+      b.title = p.nombre + (p.cargo ? ' · ' + p.cargo : '');
+      b.setAttribute('aria-pressed', String(normalNombre(p.nombre) === actual));
+      b.onclick = () => elegirReembolsado(normalNombre(p.nombre) === normalNombre($('#fReNombre').value) ? null : p);
+      cont.appendChild(b);
+    });
+    const u = leerLocal('ultimoReembolso');
+    const ver = !!(u && u.nombre && !est.edicion && !$('#fReNombre').value.trim() && Date.now() - (u.cuando || 0) < 45 * 86400000);
+    $('#btnReAnterior').hidden = !ver;
+    if (ver) {
+      $('#btnReAnterior').textContent = `Igual que el anterior: ${nombreCorto(u.nombre)} · ${u.movimiento === 'Rendición Santander' ? 'Santander' : 'Mercado Pago'}`
+        + (u.fecha ? ` · ${fechaCorta(u.fecha)}${u.operacion ? ' · op. ' + u.operacion : ''}` : ' · pendiente');
+    }
+  }
+
+  function pintarAyudaReembolso() {
+    $('#reAyuda').textContent = $('#fReFecha').value
+      ? 'Si una misma transferencia paga varias boletas, registra cada una con la misma fecha y N° de operación. El comprobante de la transferencia no se adjunta: se cruza con la cartola.'
+      : 'Sin fecha queda como reembolso pendiente. Cuando se le transfiera: abre el registro, toca «Corregir datos» y agrega la fecha y el N° de operación.';
+  }
+
+  /** La persona de la base dueña de ese RUT, si hay. */
+  const personaDeRut = v => { const c = cuerpoRut(v); return c ? est.personas.find(x => cuerpoRut(x.rut) === c) || null : null; };
+
+  /** Un toque en la persona: su nombre y su RUT (vacío si la base no lo tiene: no queda el RUT de otra persona). */
+  function elegirReembolsado(p) {
+    $('#fReNombre').value = p ? p.nombre : '';
+    $('#fReNombre').classList.remove('invalido');
+    const rut = $('#fReRut');
+    rut.value = p ? p.rut || '' : '';
+    rut.dataset.auto = p && p.rut ? '1' : '';
+    validarReRut();
+    pintarPersonasReembolso();
+    tocarFormulario();
+  }
+
+  /** Nombre escrito a mano: si está en la base, queda completo y con su RUT (si no se escribió otro). */
+  function nombreReembolsoEscrito() {
+    const p = buscarPersona($('#fReNombre').value), rut = $('#fReRut');
+    if (p) $('#fReNombre').value = p.nombre;
+    const dueno = personaDeRut(rut.value);
+    if (p && p.rut) { rut.value = p.rut; rut.dataset.auto = '1'; }
+    else if (rut.dataset.auto === '1' || (dueno && dueno !== p)) { rut.value = ''; rut.dataset.auto = ''; }
+    validarReRut();
+    pintarPersonasReembolso();
+  }
+
+  function validarReRut() {
+    const ok = revisarRut($('#fReRut'), $('#reRutEstado'), 'Es el RUT de Telconsulting, no del colaborador');
+    const dueno = ok && personaDeRut($('#fReRut').value), s = $('#reRutEstado');
+    if (dueno && normalNombre(dueno.nombre) !== normalNombre($('#fReNombre').value)) {
+      s.textContent = `Es el RUT de ${dueno.nombre} en la base`;
+      s.className = 'alerta';
+    }
+    return ok;
+  }
+
+  function usarReembolsoAnterior() {
+    const u = leerLocal('ultimoReembolso');
+    if (!u || est.edicion) return;
+    if (u.movimiento !== est.movimiento && GASTOS.includes(u.movimiento)) elegirMovimiento(u.movimiento);
+    [['fReNombre', u.nombre], ['fReRut', u.rut], ['fReFecha', u.fecha], ['fReOperacion', u.operacion]]
+      .forEach(([id, v]) => { document.getElementById(id).value = v || ''; });
+    $('#fReRut').dataset.auto = '';
+    validarReRut();
+    pintarReembolso();
+    tocarFormulario();
+  }
+
+  /** El último reembolso queda a un toque (varias boletas pagadas con una sola transferencia) y la persona, a mano. */
+  function recordarReembolso(d) {
+    const re = d.reembolso;
+    guardarLocal('ultimoReembolso', { nombre: re.nombre, rut: re.rut, fecha: re.fecha, operacion: re.operacion, movimiento: d.movimiento, cuando: Date.now() });
+    contarUso('reembolsos', re.nombre);
+    if (!buscarPersona(re.nombre, true)) {
+      est.personas.push({ nombre: re.nombre, rut: re.rut || '', cargo: '', area: '', correo: '' });
+      usarRapido({});
+    }
+  }
+
+  function validarRut() { return revisarRut($('#fRut'), $('#rutEstado'), 'Es el RUT de Telconsulting, no del proveedor'); }
+
+  function revisarRut(el, s, mensajeEmpresa) {
+    const v = el.value.trim();
     if (!v) { s.textContent = ''; s.className = ''; return true; }
     const r = rutInfo(v);
     if (!r) { s.textContent = 'Formato no válido'; s.className = 'alerta'; return false; }
     el.value = r.texto;
-    if (r.texto === '78.083.138-3') { s.textContent = 'Es el RUT de Telconsulting, no del proveedor'; s.className = 'alerta'; return false; }
+    if (r.texto === '78.083.138-3') { s.textContent = mensajeEmpresa; s.className = 'alerta'; return false; }
     s.textContent = r.ok ? 'RUT válido' : 'Dígito verificador no válido';
     s.className = r.ok ? 'ok' : 'alerta';
     return r.ok;
@@ -1565,7 +1716,7 @@
     }
     validarRut();
     completarPorRut();
-    if (!est.tocados.has('medio') && est.movimiento === 'Desembolso MP') {
+    if (!est.tocados.has('medio') && !est.reembolso && est.movimiento === 'Desembolso MP') {
       const t = r.tarjetas && r.tarjetas['Tarjeta MP'];
       if (t && t.resultado === 'coincide') { $('#fMedio').value = 'Tarjeta MP'; delDocumento($('#fMedio')); }
       else if (r.mercadoPago && opciones('#fMedio').includes('QR Mercado Pago')) { $('#fMedio').value = 'QR Mercado Pago'; delDocumento($('#fMedio')); }
@@ -1604,6 +1755,8 @@
 
   function leerFormulario() {
     const gasto = GASTOS.includes(est.movimiento);
+    const reembolso = gasto && est.reembolso ? { nombre: $('#fReNombre').value.trim(), rut: $('#fReRut').value.trim(),
+      fecha: $('#fReFecha').value, operacion: $('#fReOperacion').value.trim() } : null;
     return {
       movimiento: est.movimiento,
       fecha: $('#fFecha').value,
@@ -1617,11 +1770,12 @@
       categoria: gasto ? est.categoria : 'Recarga caja chica',
       ceco: gasto ? $('#fCeco').value.trim() : '',
       medio: $('#fMedio').value,
-      rinde: $('#fRinde').value.trim(),
+      rinde: $('#fRinde').value.trim(),       // con reembolso, el servidor deja como Rinde al colaborador
       observaciones: $('#fObs').value.trim(),
       representacion: gasto && est.categoria === 'Atención a clientes'
         ? { empresa: $('#fEmpresa').value.trim(), asistentes: $('#fAsistentes').value.trim(), motivo: $('#fMotivo').value.trim() }
-        : null
+        : null,
+      reembolso
     };
   }
 
@@ -1644,6 +1798,12 @@
     if (GASTOS.includes(d.movimiento) && !d.categoria) return falla('#chipsCategoria', 'Elige una categoría');
     if (d.representacion && !d.representacion.empresa) return falla('#fEmpresa', 'Falta la empresa cliente');
     if (d.representacion && !d.representacion.motivo) return falla('#fMotivo', 'Falta el motivo comercial');
+    if (d.reembolso) {
+      if (!d.reembolso.nombre) return falla('#fReNombre', 'Falta a quién se le reembolsa');
+      if (d.reembolso.rut && !validarReRut()) return falla('#fReRut', 'Revisa el RUT del colaborador (o déjalo vacío)');
+      if (d.reembolso.fecha && d.reembolso.fecha > hoyISO()) return falla('#fReFecha', 'La transferencia no puede tener fecha futura');
+      if (d.reembolso.operacion && !d.reembolso.fecha) return falla('#fReFecha', 'Falta la fecha de la transferencia');
+    }
     if (d.rut && !validarRut()) return falla('#fRut', 'Revisa el RUT del proveedor (o déjalo vacío)');
     // Sin las listas del servidor no se bloquea el CeCo: el servidor lo valida igual y deja la alerta.
     if (d.ceco && est.listas && !validarCeco()) return falla('#fCeco', 'El centro de costo no está en el catálogo oficial');
@@ -1687,7 +1847,8 @@
         ocr: est.lectura ? { texto: est.lectura.texto, firma: est.lectura.firma } : null,
         meta: { capturadoEn: est.capturadoEn, origen: est.origen, dispositivo: navigator.userAgent, versionApp: VERSION,
           capturas: est.pdf ? null : est.paginas.map(p => p.captura || null), plantilla: est.plantilla || null,
-          nombresEscritos: { proveedor: est.tocados.has('proveedor'), razonSocial: est.tocados.has('razonSocial') } },
+          nombresEscritos: { proveedor: est.tocados.has('proveedor'), razonSocial: est.tocados.has('razonSocial') },
+          registradoPor: Api.config().nombre || '' },
         forzar: !!forzar
       };
       if (!Api.configurada()) throw new Api.ErrorApi('La app aún no está vinculada', 'config');
@@ -1702,6 +1863,7 @@
       };
       contarUso('plantillas', est.plantilla);
       recordarProveedor(d);
+      if (d.reembolso) recordarReembolso(d);
       await terminarSesion(true);
       mostrarListo(r, d, null);
     } catch (e) {
@@ -1716,6 +1878,7 @@
         await Api.encolar(payload);
         contarUso('plantillas', est.plantilla);
         recordarProveedor(d);
+        if (d.reembolso) recordarReembolso(d);
         await terminarSesion();
         mostrarListo(null, d, e.codigo);
       } else {
@@ -1765,6 +1928,12 @@
       $('#lnkPdf').href = enlaceSeguro(r.respaldoUrl);
       $('#lnkFila').href = enlaceSeguro(r.planillaUrl);
     }
+    const re = d && d.reembolso;
+    if (re) {
+      controles.insertAdjacentHTML('beforeend', `<div class="control info"><svg class="ico"><use href="#i-check"/></svg><span>${esc(re.fecha
+        ? `Reembolso a ${re.nombre}: transferencia del ${fechaCorta(re.fecha)}${re.operacion ? ', op. ' + re.operacion : ''}`
+        : `Reembolso pendiente a ${re.nombre}: cuando se le transfiera, toca «Corregir datos» y agrega la fecha`)}</span></div>`);
+    }
     $('#listoEnlaces').hidden = !r;
     $('#btnCorregirListo').hidden = !r;
     est.listoDatos = d;
@@ -1782,7 +1951,7 @@
 
   async function abrirRegistro(f) {
     if (est.vista === 'registro') return;              // doble toque en la lista
-    est.registro = { registro: f, representacion: null, deshacer: null, cargando: true, error: null };
+    est.registro = { registro: f, representacion: null, reembolso: null, deshacer: null, cargando: true, error: null };
     ir('registro');
     await recargarRegistro(f.id);
   }
@@ -1796,7 +1965,7 @@
     try {
       const r = await Api.llamar('registro', { id });
       if (est.registro !== x) return;
-      Object.assign(x, { registro: r.registro, representacion: r.representacion || null, fichaLeida: r.fichaLeida !== false,
+      Object.assign(x, { registro: r.registro, representacion: r.representacion || null, reembolso: r.reembolso || null, fichaLeida: r.fichaLeida !== false,
         deshacer: r.deshacer, error: null });
     } catch (e) {
       if (est.registro !== x) return;
@@ -1842,17 +2011,21 @@
     $('#rgAvisoTexto').textContent = aviso;
   }
 
+  /** Observaciones sin la línea "Reembolso: …" (la escribe el servidor). */
+  const sinLineaReembolso = s => String(s || '').split(' · ').filter(x => !/^Reembolso( pendiente)?:/.test(x.trim())).join(' · ');
+
   const IDS_FORMULARIO = ['fFecha', 'fMonto', 'fTipo', 'fNumero', 'fProveedor', 'fRazon', 'fRut', 'fMedio', 'fCeco', 'fDetalle', 'fRinde', 'fObs',
-    'fEmpresa', 'fAsistentes', 'fMotivo'];
+    'fEmpresa', 'fAsistentes', 'fMotivo', 'fReNombre', 'fReRut', 'fReFecha', 'fReOperacion'];
 
   /** Copia del formulario de la captura en curso: la corrección usa el mismo formulario y al salir se devuelve tal cual. */
   function fotoFormulario() {
     const valores = {};
     IDS_FORMULARIO.forEach(id => { valores[id] = document.getElementById(id).value; });
-    return { valores, categoria: est.categoria, movimiento: est.movimiento, tocados: new Set(est.tocados), lecturaOculta: $('#lectura').hidden };
+    return { valores, categoria: est.categoria, movimiento: est.movimiento, tocados: new Set(est.tocados), lecturaOculta: $('#lectura').hidden,
+      reembolso: est.reembolso, medioSinReembolso: est.medioSinReembolso };
   }
 
-  function llenarFormulario(d, representacion) {
+  function llenarFormulario(d, representacion, reembolso) {
     const poner = (id, v) => { document.getElementById(id).value = v === undefined || v === null ? '' : v; };
     const asegurarOpcion = (sel, v) => { if (v && !opciones(sel).includes(v)) $(sel).insertAdjacentHTML('beforeend', `<option>${esc(v)}</option>`); };
     asegurarOpcion('#fTipo', d.tipoDoc);
@@ -1863,6 +2036,10 @@
       ['fRazon', d.razonSocial],
       ['fRut', d.rut], ['fMedio', d.medio], ['fCeco', d.ceco], ['fDetalle', d.detalle], ['fRinde', d.rinde], ['fObs', d.observaciones],
       ['fEmpresa', rep.empresa], ['fAsistentes', rep.asistentes], ['fMotivo', rep.motivo]].forEach(([id, v]) => poner(id, v));
+    const re = reembolso || {};
+    [['fReNombre', re.nombre], ['fReRut', re.rut], ['fReFecha', re.fecha], ['fReOperacion', re.operacion]].forEach(([id, v]) => poner(id, v));
+    $('#fReRut').dataset.auto = '';
+    est.reembolso = !!reembolso;
     est.categoria = d.categoria || '';
     est.movimiento = d.movimiento || 'Desembolso MP';
   }
@@ -1871,13 +2048,16 @@
     const x = est.registro;
     if (!x || x.cargando || x.error || x.operando || x.fichaLeida === false || est.edicion) return;
     const f = x.registro;
-    est.edicion = { id: f.id, original: f, representacion: x.representacion, previo: fotoFormulario() };
+    est.edicion = { id: f.id, original: f, representacion: x.representacion, reembolso: x.reembolso || null, previo: fotoFormulario() };
     prepararDatos();
     $$('.sugerido, .invalido').forEach(el => el.classList.remove('sugerido', 'invalido'));
-    llenarFormulario(f, x.representacion);
+    llenarFormulario(f, x.representacion, x.reembolso);
+    $('#fObs').value = sinLineaReembolso(f.observaciones);
+    est.medioSinReembolso = '';
     est.tocados = new Set(Object.values(CAMPOS));      // mientras se corrige no se autocompleta nada
     elegirMovimiento(est.movimiento);
     validarRut();
+    validarReRut();
     validarCeco();
     ['#lectura', '#sugMonto', '#controlTarjeta', '#campoRinde', '#grupoFrecuentes'].forEach(s => { $(s).hidden = true; });
     $('#segMovimiento').classList.add('bloqueado');
@@ -1900,13 +2080,17 @@
     $$('.sugerido, .invalido').forEach(el => el.classList.remove('sugerido', 'invalido'));
     $('#rutEstado').textContent = '';
     $('#cecoEstado').textContent = '';
-    if (!previo) return;
+    $('#reRutEstado').textContent = '';
+    if (!previo) { pintarReembolso(); return; }
     est.categoria = previo.categoria;
     est.movimiento = previo.movimiento;
     est.tocados = previo.tocados;
+    est.reembolso = !!previo.reembolso;
+    est.medioSinReembolso = previo.medioSinReembolso || '';
     if (hayDocumento()) elegirMovimiento(est.movimiento);
     Object.keys(previo.valores).forEach(id => { document.getElementById(id).value = previo.valores[id]; });
     $('#lectura').hidden = previo.lecturaOculta;
+    pintarReembolso();
     if (hayDocumento()) { pintarCategorias(); pintarControlTarjeta(); revisarMonto(); }
   }
 
@@ -1917,9 +2101,12 @@
     // En un ingreso no se ven categoría ni CeCo: no se tocan (A&F pudo haberlos completado)
     const campos = ['fecha', 'monto', 'tipoDoc', 'numero', 'proveedor', 'razonSocial', 'rut', 'detalle', 'medio', 'observaciones']
       .concat(GASTOS.includes(d.movimiento) ? ['categoria', 'ceco'] : []);
-    campos.forEach(k => { if (texto(d[k]) !== texto(o[k])) c[k] = d[k]; });
+    campos.forEach(k => { if (texto(d[k]) !== texto(k === 'observaciones' ? sinLineaReembolso(o[k]) : o[k])) c[k] = d[k]; });
     const rep = x => (x && (x.empresa || x.asistentes || x.motivo) ? [x.empresa, x.asistentes, x.motivo].map(texto).join('|') : '');
     if (rep(d.representacion) !== rep(est.edicion.representacion)) c.representacion = d.representacion;
+    const rutDe = v => { const r = rutInfo(v || ''); return r ? r.texto : texto(v); };
+    const re = x => (x && x.nombre ? [texto(x.nombre), rutDe(x.rut), texto(x.fecha), texto(x.operacion)].join('|') : '');
+    if (re(d.reembolso) !== re(est.edicion.reembolso)) c.reembolso = d.reembolso;
     return c;
   }
 
@@ -1939,7 +2126,7 @@
       if (est.ultimo && est.ultimo.id === id) {          // "Deshacer → Sí, corregir" debe retomar lo ya corregido
         const propios = Object.assign({}, cambios);
         if (propios.observaciones !== undefined) {     // las alertas las pone el servidor, no quien rinde
-          propios.observaciones = String(propios.observaciones).split(' · ').filter(s => !/^(Alerta|Anulado):/.test(s.trim())).join(' · ');
+          propios.observaciones = String(propios.observaciones).split(' · ').filter(s => !/^(Alerta|Anulado|Reembolso|Reembolso pendiente):/.test(s.trim())).join(' · ');
         }
         Object.assign(est.ultimo.datos, propios);
         if (cambios.categoria !== undefined) est.ultimo.categoria = cambios.categoria;
@@ -2012,14 +2199,16 @@
     if (est.paginas.length) { pintarPaginas(); ir('paginas'); }
     ir('datos');
     prepararDatos();
-    llenarFormulario(u.datos, u.datos.representacion);
+    llenarFormulario(u.datos, u.datos.representacion, u.datos.reembolso);
     est.categoria = u.categoria;
     est.tocados = u.tocados;
     elegirMovimiento(u.movimiento);
-    llenarFormulario(u.datos, u.datos.representacion);     // elegirMovimiento pudo cambiar el medio sugerido
+    llenarFormulario(u.datos, u.datos.representacion, u.datos.reembolso);     // elegirMovimiento pudo cambiar el medio sugerido
     est.categoria = u.categoria;
     pintarCategorias();
+    pintarReembolso();
     validarRut();
+    validarReRut();
     validarCeco();
     est.plantilla = u.plantilla || null;
     est.plantillaAplicada = u.plantillaAplicada || null;
@@ -2804,6 +2993,7 @@
       });
       est.categoria = ahora.categoria === a.despues.categoria && a.antes.categoria !== a.despues.categoria ? a.antes.categoria : ahora.categoria;
       pintarCategorias();
+      pintarReembolso();
       validarRut();
       validarCeco();
       completarPorRut();
@@ -2829,7 +3019,8 @@
       el.classList.remove('invalido');
     };
     est.plantilla = p.nombre;
-    if (p.movimiento && p.movimiento !== est.movimiento && listas().movimientos.includes(p.movimiento)) elegirMovimiento(p.movimiento);
+    const mantieneCuenta = est.reembolso && p.movimiento && p.movimiento !== est.movimiento;
+    if (p.movimiento && p.movimiento !== est.movimiento && listas().movimientos.includes(p.movimiento) && !est.reembolso) elegirMovimiento(p.movimiento);
     if (GASTOS.includes(est.movimiento)) {
       const cat = listas().categorias.find(c => c.nombre === p.categoria);
       if (cat) elegirCategoria(cat);
@@ -2841,7 +3032,7 @@
       validarCeco();
     }
     poner('#fDetalle', p.detalle, 'detalle');
-    poner('#fMedio', p.medio, 'medio');
+    if (!est.reembolso) poner('#fMedio', p.medio, 'medio');
     if (!$('#fTipo').classList.contains('sugerido')) poner('#fTipo', p.tipoDoc, 'tipoDoc');
     if (!$('#fProveedor').value.trim()) poner('#fProveedor', p.proveedor, 'proveedor');
     if (!$('#fRut').value.trim()) { poner('#fRut', p.rut, 'rut'); validarRut(); }
@@ -2852,7 +3043,8 @@
     pintarControlTarjeta();
     pintarPlantillas();
     tocarFormulario();
-    toast(`«${p.nombre}»: revisa el monto y la fecha. Tócala de nuevo para quitarla`);
+    toast(mantieneCuenta ? `«${p.nombre}»: se mantiene el reembolso desde ${est.movimiento === 'Rendición Santander' ? 'Santander' : 'Mercado Pago'}`
+      : `«${p.nombre}»: revisa el monto y la fecha. Tócala de nuevo para quitarla`);
   }
 
   const cuerpoRut = s => { const r = rutInfo(s); return r && r.ok ? r.texto.replace(/\./g, '').split('-')[0] : ''; };
@@ -2970,7 +3162,8 @@
     b.disabled = true;
     try {
       const r = await Api.llamar('guardarPlantillas', { reemplazar: true, completa: true, plantillas: [{ nombre: limpio, movimiento: d.movimiento, categoria: d.categoria,
-        ceco: d.ceco, detalle: d.detalle, proveedor: d.proveedor, rut: d.rut, tipoDoc: d.tipoDoc, medio: d.medio, rinde: d.rinde }] });
+        ceco: d.ceco, detalle: d.detalle, proveedor: d.proveedor, rut: d.rut, tipoDoc: d.tipoDoc,
+        medio: d.reembolso ? medioPorDefecto(d.movimiento) : d.medio, rinde: d.rinde }] });
       if (r.plantillas) usarRapido({ plantillas: r.plantillas });
       b.hidden = true;
       const visible = !r.plantillas || r.plantillas.some(p => normalNombre(p.nombre) === normalNombre(limpio));
@@ -3288,6 +3481,17 @@
       const b = e.target.closest('button');
       if (b && !est.edicion) elegirMovimiento(b.dataset.valor);
     });
+    $('#chkReembolso').onchange = e => cambiarReembolso(e.target.checked);
+    $('#segReembolso').addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (b && !est.edicion) elegirMovimiento(b.dataset.valor);
+    });
+    $('#btnReAnterior').onclick = usarReembolsoAnterior;
+    $('#fReNombre').addEventListener('input', pintarPersonasReembolso);
+    $('#fReNombre').addEventListener('change', nombreReembolsoEscrito);
+    $('#fReRut').addEventListener('input', () => { $('#fReRut').dataset.auto = ''; });
+    $('#fReRut').addEventListener('blur', validarReRut);
+    $('#fReFecha').addEventListener('change', pintarAyudaReembolso);
     $('#form').addEventListener('submit', e => e.preventDefault());
     $('#btnGuardar').onclick = () => guardar(false);
 

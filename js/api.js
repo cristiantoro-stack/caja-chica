@@ -214,20 +214,24 @@ const Demo = (() => {
       };
       case 'guardar': {
         const id = 'CC-2026-' + String(++correlativo).padStart(4, '0'), d = datos.datos || {};
-        ultimos.unshift(Object.assign({}, base, d, { id, estado: 'Pendiente revisión', controlTarjeta: '✓ ****1234', respaldoUrl: '#',
-          representacion: undefined }));
-        return { ok: true, id, fila: 4 + correlativo, respaldoUrl: '#', resumenUrl: '#', planillaUrl: '#', controlTarjeta: '✓ ****1234', alertas: [] };
+        const control = /^Tarjeta/.test(d.medio) && !d.reembolso ? '✓ ****1234' : 'No aplica';
+        ultimos.unshift(Object.assign({}, base, d, { id, estado: 'Pendiente revisión', controlTarjeta: control, respaldoUrl: '#',
+          representacion: undefined, reembolso: undefined, re: d.reembolso || null, rinde: d.reembolso ? d.reembolso.nombre : d.rinde }));
+        return { ok: true, id, fila: 4 + correlativo, respaldoUrl: '#', resumenUrl: '#', planillaUrl: '#', controlTarjeta: control, alertas: [] };
       }
       case 'historial': return { ok: true, filas: ultimos.slice(), total: ultimos.length };
       case 'registro': {
         const f = buscar(datos.id);
         if (!f) return Promise.reject(new Api.ErrorApi('No existe el registro ' + datos.id, 'servidor'));
         const motivo = f.estado === 'Pendiente revisión' ? '' : 'ya está ' + f.estado.toLowerCase();
-        return { ok: true, registro: Object.assign({}, f), representacion: f.categoria === 'Atención a clientes' ? (f.rep || null) : null, deshacer: { permitido: !motivo, motivo } };
+        return { ok: true, registro: Object.assign({}, f), representacion: f.categoria === 'Atención a clientes' ? (f.rep || null) : null,
+          reembolso: f.re ? Object.assign({ estado: f.re.fecha ? 'Transferido' : 'Pendiente' }, f.re) : null, deshacer: { permitido: !motivo, motivo } };
       }
       case 'actualizar': {
         const f = buscar(datos.id);
-        Object.keys(datos.cambios || {}).forEach(k => { if (k === 'representacion') f.rep = datos.cambios[k]; else f[k] = datos.cambios[k]; });
+        Object.keys(datos.cambios || {}).forEach(k => {
+          if (k === 'representacion') f.rep = datos.cambios[k]; else if (k === 'reembolso') f.re = datos.cambios[k]; else f[k] = datos.cambios[k];
+        });
         return { ok: true, id: datos.id, cambios: Object.keys(datos.cambios || {}) };
       }
       case 'deshacer': {

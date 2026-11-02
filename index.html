@@ -168,6 +168,34 @@
       </div>
 
       <form id="form" novalidate autocomplete="off">
+        <div class="reembolso" id="grupoReembolso">
+          <label class="interruptor">
+            <input type="checkbox" id="chkReembolso">
+            <span class="interruptor-pista"></span>
+            <span>Lo pagó un colaborador con su dinero: se le reembolsa por transferencia</span>
+          </label>
+          <div class="representacion" id="cuerpoReembolso" hidden>
+            <button type="button" class="btn-texto" id="btnReAnterior" hidden></button>
+            <div class="campo">
+              <span class="campo-etiqueta">¿A quién se le reembolsa?</span>
+              <div class="chips chips-personas" id="rePersonas"></div>
+            </div>
+            <label class="campo">Colaborador<input id="fReNombre" placeholder="Nombre y apellido"></label>
+            <label class="campo">RUT del colaborador<input id="fReRut" placeholder="12.345.678-5"><small id="reRutEstado"></small></label>
+            <div class="campo">
+              <span class="campo-etiqueta">Se le transfiere desde</span>
+              <div class="segmentado dos" id="segReembolso" role="radiogroup" aria-label="Cuenta desde la que se transfiere">
+                <button type="button" role="radio" data-valor="Desembolso MP">Mercado Pago</button>
+                <button type="button" role="radio" data-valor="Rendición Santander">Santander</button>
+              </div>
+            </div>
+            <div class="campos-2">
+              <label class="campo">Fecha transferencia<input type="date" id="fReFecha"></label>
+              <label class="campo">N° operación<input id="fReOperacion" inputmode="numeric"></label>
+            </div>
+            <p class="ayuda" id="reAyuda"></p>
+          </div>
+        </div>
         <div>
           <div class="campo">
             <label for="fFecha">Fecha del documento</label>
