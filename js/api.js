@@ -199,6 +199,23 @@ const Demo = (() => {
         plantillas = plantillas.filter(p => normal(p.nombre) !== clave).concat([Object.assign({ monto: null }, nueva)]);
         return { ok: true, agregadas: [nueva.nombre], actualizadas: [], avisos: [], plantillas: plantillas.slice() };
       }
+      case 'agregarCategoria': {
+        const nombre = String(datos.nombre || '').replace(/\s+/g, ' ').trim(), existe = listas.categorias.find(c => normal(c.nombre) === normal(nombre));
+        if (existe) return { ok: true, creada: false, categoria: existe, categorias: listas.categorias.slice(), aviso: `Ya existe la categoría «${existe.nombre}»` };
+        const nueva = { nombre, ceco: datos.ceco || '' }, i = listas.categorias.findIndex(c => c.nombre === 'Otros');
+        listas.categorias.splice(i < 0 ? listas.categorias.length : i, 0, nueva);
+        return { ok: true, creada: true, categoria: nueva, categorias: listas.categorias.slice() };
+      }
+      case 'quitarCategoria': {
+        if (ultimos.some(f => normal(f.categoria) === normal(datos.nombre) && f.estado !== 'Anulado')) {
+          return Promise.reject(new Api.ErrorApi(`«${datos.nombre}» ya se usó en gastos de este año: no se quita`, 'servidor'));
+        }
+        listas.categorias = listas.categorias.filter(c => normal(c.nombre) !== normal(datos.nombre));
+        return { ok: true, quitada: true, categorias: listas.categorias.slice() };
+      }
+      case 'quitarPlantilla':
+        plantillas = plantillas.filter(p => normal(p.nombre) !== normal(datos.nombre));
+        return { ok: true, quitada: true, plantillas: plantillas.slice() };
       case 'configurar': return { ok: true, tarjetas: { mp: '****' + (datos.tarjetaMP || '1234'), santander: '' } };
       case 'resumen': return {
         ok: true, saldo: 154510, planillaUrl: '#', ultimos: ultimos.slice(0, 5), custodia: custodiaPublica(), huellasQr: Object.assign({}, huellas),

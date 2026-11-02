@@ -1,6 +1,6 @@
 /* App Caja Chica · flujo: capturar → revisar páginas → datos del gasto → guardar en Drive y en la planilla. */
 (() => {
-  const VERSION = '1.6.0';
+  const VERSION = '1.8.0';
   const MAX_BYTES = 20 * 1048576;
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
@@ -42,6 +42,8 @@
     etapa: undefined      // pantalla de trabajo guardada en el teléfono, para retomarla si Android cierra la app
   };
   let cadena = Promise.resolve();      // las fotos se procesan de a una (cuida la memoria del teléfono)
+  // Agregar/quitar categorías y rendiciones frecuentes: en cada lista manda la última respuesta (y config no la pisa si es anterior)
+  const turnos = { categorias: 0, plantillas: 0 }, cambiadasEn = { categorias: 0, plantillas: 0 };
 
   // ---------- Utilidades ----------
 
@@ -81,6 +83,14 @@
   }
 
   function toast(mensaje, ms = 3200) {
+    // Durante la presentación del logo el aviso quedaría tapado: espera a que termine (como máximo unos 5 s)
+    if (document.documentElement.classList.contains('con-intro') && (toast.espera || 0) < 25) {
+      toast.espera = (toast.espera || 0) + 1;
+      clearTimeout(toast.diferido);
+      toast.diferido = setTimeout(() => toast(mensaje, ms), 200);
+      return;
+    }
+    toast.espera = 0;
     const t = $('#toast');
     t.textContent = mensaje;
     t.classList.add('visible');
@@ -167,9 +177,17 @@
       area.value = campo && campo.valor ? campo.valor : '';
       area.classList.remove('invalido');
       area.placeholder = campo ? campo.placeholder || '' : '';
+      const opcion = $('#dialogoOpcion'), conOpciones = !!(campo && campo.opciones);
+      $('#dialogoOpcionCampo').hidden = !conOpciones;
+      if (conOpciones) {
+        $('#dialogoOpcionEtiqueta').textContent = campo.etiquetaOpcion || '';
+        opcion.innerHTML = campo.opciones.map(o => `<option value="${esc(o.valor)}">${esc(o.texto)}</option>`).join('');
+        opcion.value = campo.opcion || '';
+      }
       est.dialogo = () => {
         $('#dialogo').hidden = true;
         area.hidden = true;
+        $('#dialogoOpcionCampo').hidden = true;
         $('#dialogoSi').onclick = $('#dialogoNo').onclick = null;
         if (previo && previo.focus) previo.focus();
         ok(resultado);
@@ -180,6 +198,7 @@
         if (v && campo) {
           v = area.value.trim();
           if (!v) { area.classList.add('invalido'); area.focus(); return; }
+          if (conOpciones) v = { texto: v, opcion: opcion.value };
         }
         respondido = true;
         resultado = v;
@@ -412,6 +431,7 @@
   async function guardarEtapa(vista) {
     if (est.etapa === vista) return;
     est.etapa = vista;
+    try { if (vista) localStorage.setItem('cc.trabajando', '1'); else localStorage.removeItem('cc.trabajando'); } catch (e) { /* sin espacio */ }
     try {
       if (vista) await DB.guardar('sesion', 'etapa', { vista, guardado: Date.now() });
       else await DB.borrar('sesion', 'etapa');
@@ -1447,6 +1467,8 @@
 
   function pintarCategorias() {
     const cont = $('#chipsCategoria');
+    if (est.categoria && GASTOS.includes(est.movimiento) && !est.edicion && (est.listas || Api.demo)
+      && !listas().categorias.some(c => c.nombre === est.categoria)) est.categoria = '';
     cont.innerHTML = '';
     listas().categorias.filter(c => c.nombre !== 'Recarga caja chica').forEach(c => {
       const b = document.createElement('button');
@@ -1456,6 +1478,12 @@
       b.onclick = () => (est.categoria === c.nombre ? quitarCategoria(c) : elegirCategoria(c));
       cont.appendChild(b);
     });
+    const nueva = document.createElement('button');
+    nueva.type = 'button';
+    nueva.className = 'mas';
+    nueva.textContent = '+ Nueva';
+    nueva.onclick = categoriaNuevaEnGasto;
+    cont.appendChild(nueva);
     $('#grupoRepresentacion').hidden = !(GASTOS.includes(est.movimiento) && est.categoria === 'Atención a clientes');
   }
 
@@ -2837,6 +2865,7 @@
     if (!local) guardarLocal('rapido', { personas: est.personas, plantillas: est.plantillas, proveedores: est.proveedores });
     if (est.vista === 'datos') pintarPlantillas();
     if (est.vista === 'entrega') pintarPersonasActa();
+    if (est.vista === 'ajustes') pintarGestion();
   }
 
   /** Chips con las personas más usadas (y quienes rinden en las rendiciones frecuentes): un toque llena nombre, RUT, cargo y correo. */
@@ -2929,7 +2958,11 @@
 
   function pintarPlantillas() {
     const grupo = $('#grupoFrecuentes'), cont = $('#chipsFrecuentes');
-    if (est.edicion || !est.plantillas.length) { grupo.hidden = true; return; }
+    if (est.edicion) { grupo.hidden = true; return; }
+    if (est.plantilla && est.plantillas.length && !est.plantillas.some(p => p.nombre === est.plantilla)) {
+      est.plantilla = null;                         // ya no existe (se quitó): el gasto no queda asociado a ella
+      est.plantillaAplicada = null;
+    }
     const uso = usoLocal('plantillas');
     let orden = est.plantillas.map((p, i) => ({ p, i, n: uso[normalNombre(p.nombre)] || 0 })).sort((a, b) => b.n - a.n || a.i - b.i).map(x => x.p);
     const sugerida = orden.find(p => p.nombre === est.plantillaSugerida);
@@ -2953,6 +2986,12 @@
       mas.onclick = () => { est.verTodasPlantillas = true; pintarPlantillas(); };
       cont.appendChild(mas);
     }
+    const nueva = document.createElement('button');
+    nueva.type = 'button';
+    nueva.className = 'mas';
+    nueva.textContent = '+ Nueva';
+    nueva.onclick = nuevaPlantilla;
+    cont.appendChild(nueva);
     grupo.hidden = false;
   }
 
@@ -3149,30 +3188,153 @@
 
   /** Después de guardar: deja este gasto como rendición frecuente (un botón en "Datos del gasto"). */
   async function guardarFrecuente() {
-    const d = est.listoDatos;
+    const d = est.listoDatos, b = $('#btnFrecuente');
     if (!d) return;
+    if (await crearPlantilla(d, b)) b.hidden = true;
+  }
+
+  /** "+ Nueva" en Rendiciones frecuentes: con lo ya llenado en "Datos del gasto" (monto y fecha salen siempre del documento). */
+  async function nuevaPlantilla() {
+    const d = leerFormulario();
+    if (!d.detalle && (!d.categoria || !GASTOS.includes(d.movimiento))) {
+      toast('Primero elige la categoría o escribe el detalle: la rendición frecuente copia lo que ya llenaste', 5000);
+      return;
+    }
+    const nombre = await crearPlantilla(d, null);
+    if (!nombre || est.vista !== 'datos' || est.edicion) return;
+    const ahora = fotoCampos();                      // queda marcada: desmarcarla no cambia nada de lo escrito
+    est.plantilla = nombre;
+    est.plantillaAplicada = { nombre, antes: ahora, despues: ahora };
+    pintarPlantillas();
+    tocarFormulario();
+  }
+
+  /** Guarda (o reemplaza, si se confirma) una rendición frecuente con los datos d. Devuelve su nombre o null. */
+  async function crearPlantilla(d, b) {
+    if (!navigator.onLine) { toast('Sin conexión: para crear una rendición frecuente necesitas internet'); return null; }
     const sugerido = [d.categoria, d.proveedor].filter(Boolean).join(' · ').slice(0, 60);
     const nombre = await preguntar('Rendición frecuente', 'Queda como botón en "Datos del gasto": llena categoría, CeCo, detalle, medio, proveedor y quién rinde. El monto y la fecha se toman siempre del documento.',
       'Guardar', 'Cancelar', { placeholder: 'Nombre del botón (ej: Desayuno empresa)', valor: sugerido });
     if (!nombre) return;
     const limpio = nombre.replace(/\s+/g, ' ').trim().slice(0, 60);
     const existe = est.plantillas.some(p => normalNombre(p.nombre) === normalNombre(limpio));
-    if (existe && !(await preguntar('Ya existe', `Ya hay una rendición frecuente «${limpio}». ¿Reemplazarla con los datos de este gasto?`, 'Reemplazar', 'Cancelar'))) return;
-    const b = $('#btnFrecuente');
-    b.disabled = true;
+    if (existe && !(await preguntar('Ya existe', `Ya hay una rendición frecuente «${limpio}». ¿Reemplazarla con los datos de este gasto?`, 'Reemplazar', 'Cancelar'))) return null;
+    if (b) b.disabled = true;
+    const turno = ++turnos.plantillas;
+    toast('Guardando la rendición frecuente…', 8000);
     try {
       const r = await Api.llamar('guardarPlantillas', { reemplazar: true, completa: true, plantillas: [{ nombre: limpio, movimiento: d.movimiento, categoria: d.categoria,
         ceco: d.ceco, detalle: d.detalle, proveedor: d.proveedor, rut: d.rut, tipoDoc: d.tipoDoc,
         medio: d.reembolso ? medioPorDefecto(d.movimiento) : d.medio, rinde: d.rinde }] });
-      if (r.plantillas) usarRapido({ plantillas: r.plantillas });
-      b.hidden = true;
-      const visible = !r.plantillas || r.plantillas.some(p => normalNombre(p.nombre) === normalNombre(limpio));
+      cambiadasEn.plantillas = Date.now();
+      if (r.plantillas && turno === turnos.plantillas) usarRapido({ plantillas: r.plantillas });
+      // 14) Si ya existía con otras mayúsculas, el servidor conserva su nombre: ese es el que queda marcado
+      const guardada = (r.plantillas || []).find(p => normalNombre(p.nombre) === normalNombre(limpio));
+      const visible = !r.plantillas || !!guardada;
       toast(visible ? `Listo: «${limpio}» aparece en "Datos del gasto"` + ((r.avisos || []).length ? ` (${r.avisos[0]})` : '')
-        : `«${limpio}» quedó en la planilla, pero la app muestra solo las primeras 60: desactiva alguna que no se use`, 6000);
+        : `«${limpio}» quedó en la planilla, pero la app muestra solo las primeras 60: quita alguna que no se use (Ajustes)`, 6000);
+      return visible ? (guardada ? guardada.nombre : limpio) : null;
     } catch (e) {
-      toast('No se pudo guardar: ' + e.message, 6000);
+      toast(e.codigo === 'red' ? 'Sin conexión: para crear una rendición frecuente necesitas internet' : 'No se pudo guardar: ' + e.message, 6000);
+      return null;
     } finally {
-      b.disabled = false;
+      if (b) b.disabled = false;
+    }
+  }
+
+  // ---------- Categorías y rendiciones frecuentes (Ajustes y "+ Nueva") ----------
+
+  /** Categoría nueva: queda en la hoja Listas para todos. El CeCo sugerido se pone solo al elegirla (vacío si depende del proyecto). */
+  async function nuevaCategoria() {
+    if (!Api.demo && !Api.configurada()) { toast('Primero vincula la app (Conexión con Drive)'); return null; }
+    if (!navigator.onLine) { toast('Sin conexión: para crear una categoría necesitas internet'); return null; }
+    const L = listas(), cecos = L.cecos || [];
+    // Como sugerido, solo códigos finales: uno que agrupa otros (nodo padre) no sirve para imputar
+    const finales = cecos.filter(c => !cecos.some(o => o.codigo !== c.codigo && o.codigo.startsWith(c.codigo + '-')));
+    const r = await preguntar('Nueva categoría', 'Queda disponible para todos los gastos y en la planilla. El CeCo sugerido se pone solo al elegirla: déjalo vacío si depende del proyecto.',
+      'Crear', 'Cancelar', { placeholder: 'Nombre (ej: Peajes y TAG)', etiquetaOpcion: 'CeCo sugerido',
+        opciones: [{ valor: '', texto: 'Sin CeCo sugerido' }].concat(finales.map(c => ({ valor: c.codigo, texto: c.codigo + (c.significado ? ' · ' + c.significado : '') }))) });
+    if (!r) return null;
+    const nombre = r.texto.replace(/\s+/g, ' ').trim().slice(0, 60);
+    if (normalNombre(nombre) === normalNombre('Recarga caja chica')) { toast('«Recarga caja chica» es la de los ingresos: usa otro nombre', 5000); return null; }
+    const existe = L.categorias.find(c => normalNombre(c.nombre) === normalNombre(nombre));
+    if (existe) { toast(`Ya existe «${existe.nombre}»`); return existe; }
+    const turno = ++turnos.categorias;
+    toast('Creando la categoría…', 8000);
+    try {
+      const x = await Api.llamar('agregarCategoria', { nombre, ceco: r.opcion });
+      cambiadasEn.categorias = Date.now();
+      if (turno === turnos.categorias) usarCategorias(x.categorias);
+      toast(x.creada ? `Categoría «${x.categoria.nombre}» creada` : x.aviso);
+      return x.categoria;
+    } catch (e) {
+      toast(e.codigo === 'red' ? 'Sin conexión: para crear una categoría necesitas internet' : 'No se pudo crear: ' + e.message, 6000);
+      return null;
+    }
+  }
+
+  /** "+ Nueva" en Categoría: la crea y la deja elegida en el gasto. */
+  async function categoriaNuevaEnGasto() {
+    const c = await nuevaCategoria();
+    if (!c || est.vista !== 'datos' || !GASTOS.includes(est.movimiento)) return;
+    const cat = listas().categorias.find(x => normalNombre(x.nombre) === normalNombre(c.nombre));
+    if (cat) elegirCategoria(cat);
+    tocarFormulario();
+  }
+
+  function usarCategorias(categorias) {
+    if (!Array.isArray(categorias)) return;
+    est.listas = Object.assign({}, listas(), { categorias });
+    guardarLocal('listas', est.listas);
+    if (est.vista === 'datos') pintarCategorias();
+    if (est.vista === 'ajustes') pintarGestion();
+  }
+
+  /** Ajustes: las categorías y rendiciones frecuentes de la app, cada una con "Quitar". */
+  function pintarGestion() {
+    const sinDatos = !Api.demo && (!Api.configurada() || !est.listas);
+    $('#btnNuevaCategoria').hidden = sinDatos;
+    if (sinDatos) {
+      $('#gestionCategorias').innerHTML = `<p class="ayuda">${Api.configurada() ? 'Abre la app con conexión para cargar las categorías.' : 'Vincula la app (Conexión con Drive) para ver y agregar categorías.'}</p>`;
+      $('#gestionPlantillas').innerHTML = '';
+      return;
+    }
+    const FIJAS = ['Atención a clientes', 'Otros'];     // la app las necesita (representación y "todo lo demás")
+    const fila = (titulo, sub, tipo, nombre) => `<li><span><strong>${esc(titulo)}</strong>${sub ? `<small>${esc(sub)}</small>` : ''}</span>`
+      + (tipo ? `<button type="button" class="btn-texto" data-quitar="${tipo}" data-nombre="${esc(nombre)}">Quitar</button>` : '') + '</li>';
+    const cats = listas().categorias.filter(c => c.nombre !== 'Recarga caja chica');
+    $('#gestionCategorias').innerHTML = `<h3>Categorías (${cats.length})</h3><ul>`
+      + cats.map(c => fila(c.nombre, c.ceco ? 'CeCo sugerido: ' + c.ceco : '', FIJAS.includes(c.nombre) ? null : 'categoria', c.nombre)).join('') + '</ul>';
+    $('#gestionPlantillas').innerHTML = `<h3>Rendiciones frecuentes (${est.plantillas.length})</h3>` + (est.plantillas.length
+      ? '<ul>' + est.plantillas.map(p => fila(p.nombre, [p.categoria, p.detalle].filter(Boolean).join(' · '), 'plantilla', p.nombre)).join('') + '</ul>'
+      : '<p class="ayuda">Aún no hay: se crean en "Datos del gasto" con + Nueva.</p>');
+  }
+
+  async function quitarDeLista(tipo, nombre, boton) {
+    const categoria = tipo === 'categoria';
+    const si = await preguntar(categoria ? 'Quitar categoría' : 'Quitar rendición frecuente', categoria
+      ? `«${nombre}» deja de aparecer en la app. Si ya se usó en gastos de este año o la usa una rendición frecuente, no se puede quitar.`
+      : `«${nombre}» deja de aparecer en la app. Queda guardada en la planilla, desactivada, por si se quiere recuperar.`, 'Quitar', 'Cancelar');
+    if (!si) return;
+    if (!navigator.onLine) { toast('Sin conexión: para quitarla necesitas internet'); return; }
+    boton.disabled = true;
+    const lista = categoria ? 'categorias' : 'plantillas', turno = ++turnos[lista];
+    try {
+      const r = await Api.llamar(categoria ? 'quitarCategoria' : 'quitarPlantilla', { nombre });
+      cambiadasEn[lista] = Date.now();
+      // 3) El gasto a medio llenar la suelta al volver a "Datos del gasto" (pintarCategorias / pintarPlantillas)
+      if (categoria) {
+        if (normalNombre(est.categoria) === normalNombre(nombre)) est.categoria = '';
+        if (turno === turnos[lista]) usarCategorias(r.categorias);
+      } else {
+        if (est.plantilla && normalNombre(est.plantilla) === normalNombre(nombre)) { est.plantilla = null; est.plantillaAplicada = null; }
+        if (turno === turnos[lista]) usarRapido({ plantillas: r.plantillas });
+      }
+      pintarGestion();
+      toast(r.quitada ? `«${nombre}» ya no aparece en la app` : (r.aviso || `«${nombre}» ya no estaba`));
+    } catch (e) {
+      boton.disabled = false;
+      toast(e.codigo === 'red' ? 'Sin conexión: para quitarla necesitas internet' : e.message, 6000);
     }
   }
 
@@ -3192,6 +3354,7 @@
     $('#aCamaraNativa').checked = !!leerLocal('camaraNativa');
     $('#estadoConexion').textContent = '';
     $('#version').textContent = `App Caja Chica v${VERSION} · Telconsulting`;
+    pintarGestion();
   }
 
   function leerConexion() {
@@ -3243,13 +3406,16 @@
 
   async function cargarConfig() {
     if (!Api.configurada()) return;
+    const inicio = Date.now();
     try {
       const r = await Api.llamar('config');
-      est.listas = r.listas;
+      // Si mientras tanto se agregó o quitó una categoría o frecuente, esta respuesta ya viene atrasada en eso
+      const atrasada = cambiadasEn.categorias > inicio;
+      est.listas = atrasada && est.listas ? Object.assign({}, r.listas, { categorias: est.listas.categorias }) : r.listas;
       est.tarjetas = r.tarjetas || {};
-      guardarLocal('listas', r.listas);
+      guardarLocal('listas', est.listas);
       guardarLocal('tarjetas', est.tarjetas);
-      usarRapido({ personas: r.personas, plantillas: r.plantillas, proveedores: r.proveedores });
+      usarRapido({ personas: r.personas, plantillas: cambiadasEn.plantillas > inicio ? undefined : r.plantillas, proveedores: r.proveedores });
       if (r.custodia) pintarCustodia(r.custodia);
       if (r.huellasQr) guardarHuellas(r.huellasQr);
       if (est.vista === 'datos') { pintarCategorias(); validarCeco(); pintarPlantillas(); }
@@ -3498,6 +3664,11 @@
     $('#btnOtro').onclick = () => volverInicio(() => { nuevaCaptura(); abrirCamara(); });
     $('#btnCorregirListo').onclick = () => { if (est.listoActual) abrirRegistro(est.listoActual); };
     $('#btnFrecuente').onclick = guardarFrecuente;
+    $('#btnNuevaCategoria').onclick = nuevaCategoria;
+    $('#v-ajustes').addEventListener('click', e => {
+      const b = e.target.closest('[data-quitar]');
+      if (b) quitarDeLista(b.dataset.quitar, b.dataset.nombre, b);
+    });
     $('#btnEntrega').onclick = pedirEntrega;
     $('#segEntrega').addEventListener('click', e => { const b = e.target.closest('button'); if (b) cambiarTipoEntrega(b.dataset.valor); });
     $('#btnLeerQr').onclick = abrirLectorQr;
