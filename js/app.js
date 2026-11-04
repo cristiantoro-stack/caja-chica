@@ -1,6 +1,6 @@
 /* App Caja Chica · flujo: capturar → revisar páginas → datos del gasto → guardar en Drive y en la planilla. */
 (() => {
-  const VERSION = '1.8.2';
+  const VERSION = '1.8.3';
   const MAX_BYTES = 20 * 1048576;
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
@@ -294,6 +294,11 @@
     $('#kpiDocs').textContent = m.documentos || 0;
     $('#kpiTarjeta').textContent = m.conTarjeta ? `${m.tarjetaOk}/${m.conTarjeta}` : '—';
     $('#kpiSaldo').textContent = clp(r.saldo || 0);
+    // Reembolsos sin transferir: ya restan del saldo, pero aún no salen de la cuenta
+    const re = r.reembolsosPendientes || {};
+    $('#kpiReembolsos').hidden = !re.cantidad;
+    $('#kpiReembolsos').textContent = re.cantidad
+      ? `Reembolsos pendientes de transferir: ${clp(re.monto)} (${re.cantidad} ${re.cantidad === 1 ? 'boleta' : 'boletas'}). Ya están descontados del saldo.` : '';
     pintarLista(r.ultimos || []);
     $('#btnVerMas').hidden = !r.ultimos || r.ultimos.length < 5;
     if (r.custodia) pintarCustodia(r.custodia);

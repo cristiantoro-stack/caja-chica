@@ -218,7 +218,9 @@ const Demo = (() => {
         return { ok: true, quitada: true, plantillas: plantillas.slice() };
       case 'configurar': return { ok: true, tarjetas: { mp: '****' + (datos.tarjetaMP || '1234'), santander: '' } };
       case 'resumen': return {
-        ok: true, saldo: 154510, planillaUrl: '#', ultimos: ultimos.slice(0, 5), custodia: custodiaPublica(), huellasQr: Object.assign({}, huellas),
+        ok: true, saldo: 154510, planillaUrl: '#',
+        reembolsosPendientes: ultimos.filter(f => f.re && !f.re.fecha && f.estado !== 'Anulado')
+          .reduce((t, f) => ({ cantidad: t.cantidad + 1, monto: t.monto + (Number(f.monto) || 0) }), { cantidad: 0, monto: 0 }), ultimos: ultimos.slice(0, 5), custodia: custodiaPublica(), huellasQr: Object.assign({}, huellas),
         mes: { mes: '2026-10', documentos: 6, desembolsos: 245300, ingresos: 400000, conTarjeta: 5, tarjetaOk: 4 }
       };
       case 'ocr': return {

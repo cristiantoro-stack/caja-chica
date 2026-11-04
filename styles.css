@@ -64,6 +64,7 @@ main { max-width: 560px; margin: 0 auto; }
 .tablero-principal { margin: 6px 0 14px; }
 .tablero-principal span { display: block; font-size: 13px; color: #aab4be; }
 .tablero-principal strong { font-size: 32px; font-weight: 700; color: var(--dorado); letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
+.tablero-nota { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .12); font-size: 13px; color: #e9cf93; }
 .tablero-grilla { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; border-top: 1px solid rgba(255, 255, 255, .1); padding-top: 12px; }
 .tablero-grilla span { display: block; font-size: 11.5px; color: #aab4be; }
 .tablero-grilla strong { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; }
